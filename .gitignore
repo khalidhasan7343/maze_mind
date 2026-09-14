@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+db/*.db
+ml/models/*.joblib
+dashboard/figures/*.png
+.venv/
