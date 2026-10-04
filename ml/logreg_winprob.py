@@ -42,7 +42,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, accuracy_score
 
 from game.engine import RoundEngine, RoundConfig, Outcome
-from data.simulate import PROFILES, _greedy_direction, _legal_directions
+from data.simulate import PROFILES, iter_bot_round
+from ml.artifacts import metadata, validate_bundle
+from data.logger import RoundLogger
 
 import os
 
@@ -61,9 +63,11 @@ def collect_snapshots(n_rounds_per_profile: int = 60, snapshots_per_round: int =
     """
     rng = random.Random(seed)
     rows = []
+    if n_rounds_per_profile < 1 or snapshots_per_round < 1:
+        raise ValueError("Round and snapshot counts must be positive")
 
     for profile in PROFILES:
-        for _ in range(n_rounds_per_profile):
+        for round_index in range(n_rounds_per_profile):
             cfg = RoundConfig(
                 width=rng.choice([8, 10, 12]),
                 height=rng.choice([8, 10, 12]),
@@ -72,59 +76,73 @@ def collect_snapshots(n_rounds_per_profile: int = 60, snapshots_per_round: int =
                 hunter_move_interval=rng.choice([15, 20, 25]),
                 seed=rng.randint(0, 1_000_000),
             )
-            engine = RoundEngine(cfg)
             snapshots = []
-            max_ticks = int(cfg.round_time_limit_s * cfg.fps)
-            dt = 1.0 / cfg.fps
-
-            for tick in range(max_ticks):
-                if engine.outcome != Outcome.PLAYING:
-                    break
-                legal = _legal_directions(engine)
-                if not legal:
-                    break
-                if rng.random() < profile.mistake_rate:
-                    direction = rng.choice(legal)
-                else:
-                    greedy = _greedy_direction(engine)
-                    direction = greedy if (greedy and rng.random() < profile.greediness) else rng.choice(legal)
-                engine.move_player(direction)
-                engine.update(simulated_dt=dt)
-
-                if tick % max(1, max_ticks // snapshots_per_round) == 0:
+            interval = cfg.round_time_limit_s / snapshots_per_round
+            next_snapshot = 0.0
+            for engine in iter_bot_round(profile, cfg, rng):
+                if engine.outcome == Outcome.PLAYING and engine.elapsed_s + 1e-10 >= next_snapshot:
                     snapshots.append(dict(engine.win_probability_features()))
+                    next_snapshot += interval
 
             won = 1 if engine.outcome == Outcome.ESCAPED else 0
             for snap in snapshots:
                 snap["won"] = won
+                snap["round_id"] = f"{seed}-{profile.name}-{round_index}"
+                snap["is_bot"] = 1
                 rows.append(snap)
 
     return pd.DataFrame(rows)
 
 
-def train(model_path: str = MODEL_PATH, **collect_kwargs):
+def split_snapshot_rounds(df: pd.DataFrame):
+    """Stratify whole rounds, never placing snapshots of one round in both sets."""
+    rounds = df.groupby("round_id")["won"].first()
+    counts = rounds.value_counts()
+    if len(counts) != 2 or counts.min() < 2:
+        raise ValueError("Win probability needs at least two escaped and two unsuccessful rounds")
+    train_ids, test_ids = train_test_split(rounds.index.to_numpy(), test_size=max(2, int(np.ceil(len(rounds) * 0.2))),
+                                         random_state=42, stratify=rounds.to_numpy())
+    return df[df["round_id"].isin(train_ids)], df[df["round_id"].isin(test_ids)]
+
+
+def train(model_path: str = MODEL_PATH, snapshot_frame: pd.DataFrame | None = None, **collect_kwargs):
     global _MODEL_CACHE
-    df = collect_snapshots(**collect_kwargs)
-    df = df.replace([np.inf, -np.inf], np.nan).dropna()
+    df = collect_snapshots(**collect_kwargs) if snapshot_frame is None else snapshot_frame.copy()
+    if snapshot_frame is None:
+        human = pd.DataFrame(RoundLogger().fetch_snapshots())
+        if not human.empty:
+            df = pd.concat([df, human[human["is_bot"] == 0]], ignore_index=True)
+    if df.empty:
+        raise ValueError("No snapshots available for training")
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=FEATURE_COLS + ["won", "round_id", "is_bot"])
 
     X = df[FEATURE_COLS].values
     y = df["won"].values
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
+    training, testing = split_snapshot_rounds(df)
+    X_train, X_test = training[FEATURE_COLS].values, testing[FEATURE_COLS].values
+    y_train, y_test = training["won"].values, testing["won"].values
 
     clf = LogisticRegression(max_iter=1000)
     clf.fit(X_train, y_train)
 
     proba = clf.predict_proba(X_test)[:, 1]
     pred = clf.predict(X_test)
-    print(f"Logistic regression AUC: {roc_auc_score(y_test, proba):.3f}")
+    metrics = {"auc": float(roc_auc_score(y_test, proba)), "accuracy": float(accuracy_score(y_test, pred)),
+               "train_rounds": int(training["round_id"].nunique()), "test_rounds": int(testing["round_id"].nunique())}
+    print(f"Logistic regression AUC: {metrics['auc']:.3f}")
     print(f"Accuracy: {accuracy_score(y_test, pred):.3f}")
     print("Coefficients:", dict(zip(FEATURE_COLS, clf.coef_[0].round(3))))
+    for is_bot, domain in [(1, "synthetic"), (0, "human")]:
+        mask = testing["is_bot"].to_numpy() == is_bot
+        metrics[domain] = {"samples": int(mask.sum()), "accuracy": float(accuracy_score(y_test[mask], pred[mask])) if mask.any() else None,
+                           "auc": float(roc_auc_score(y_test[mask], proba[mask])) if len(set(y_test[mask])) == 2 else None}
+        print(f"{domain} held-out evaluation: {metrics[domain]}")
+    clf.fit(X, y)
 
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    bundle = {"model": clf, "features": FEATURE_COLS}
+    os.makedirs(os.path.dirname(os.path.abspath(model_path)), exist_ok=True)
+    bundle = {"model": clf, "features": FEATURE_COLS, "metrics": metrics,
+              "_path": model_path, **metadata()}
     joblib.dump(bundle, model_path)
     _MODEL_CACHE = bundle
     print(f"Saved model -> {model_path}")
@@ -136,8 +154,8 @@ def predict_win_probability(features: dict, model_path: str = MODEL_PATH) -> flo
     straight from RoundEngine.win_probability_features(), unscaled (the
     model was trained on raw values, so no scale_params needed here)."""
     global _MODEL_CACHE
-    if _MODEL_CACHE is None or getattr(_MODEL_CACHE, "_path", None) != model_path:
-        bundle = joblib.load(model_path)
+    if _MODEL_CACHE is None or _MODEL_CACHE.get("_path") != model_path:
+        bundle = validate_bundle(joblib.load(model_path))
         bundle["_path"] = model_path
         _MODEL_CACHE = bundle
     else:

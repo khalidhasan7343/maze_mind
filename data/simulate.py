@@ -29,8 +29,8 @@ THEORETICAL FOUNDATION & LECTURE CONCEPTS:
 
 4. UNIFIED LOGGING CONTRACT:
    Both synthetic simulation and interactive Pygame sessions log into the
-   identical SQLite schema, guaranteeing zero distribution shift in schema
-   representation as real human telemetry replaces or augments synthetic data.
+   identical SQLite schema. Synthetic behavior still differs from human play;
+   source flags allow separate evaluation on real human telemetry.
 ===============================================================================
 """
 
@@ -97,36 +97,8 @@ def _legal_directions(engine: RoundEngine) -> list:
 
 
 def run_bot_round(profile: BotProfile, config: RoundConfig, rng: random.Random) -> RoundRecord:
-    engine = RoundEngine(config)
-    max_ticks = int(config.round_time_limit_s * config.fps)
-    dt = 1.0 / config.fps
-
-    for _ in range(max_ticks):
-        if engine.outcome != Outcome.PLAYING:
-            break
-
-        think_time = rng.uniform(*profile.think_time_range)
-        engine._last_decision_ts -= think_time  # simulate think time without sleeping
-
-        legal = _legal_directions(engine)
-        if not legal:
-            break
-
-        if rng.random() < profile.mistake_rate:
-            direction = rng.choice(legal)
-        else:
-            greedy = _greedy_direction(engine)
-            if greedy is not None and rng.random() < profile.greediness:
-                direction = greedy
-            else:
-                direction = rng.choice(legal)
-
-        engine.move_player(direction)
-        # advance the hunter roughly one "frame" per player decision tick
-        engine.update(simulated_dt=dt)
-
-    if engine.outcome == Outcome.PLAYING:
-        engine.outcome = Outcome.TIMEOUT
+    for engine in iter_bot_round(profile, config, rng):
+        pass
 
     optimal = engine.maze.shortest_path_len(engine.maze.start, engine.maze.exit)
     return RoundRecord(
@@ -145,10 +117,37 @@ def run_bot_round(profile: BotProfile, config: RoundConfig, rng: random.Random) 
         hunter_replan_ms=int(1000 * config.hunter_replan_interval / config.fps),
         hunter_move_ms=int(1000 * config.hunter_move_interval / config.fps),
         skill_label=SKILL_FOR_PROFILE[profile.name],
+        label_source="synthetic",
+        remaining_path_len=engine.maze.shortest_path_len(engine.player_pos, engine.maze.exit),
     )
 
 
+def iter_bot_round(profile: BotProfile, config: RoundConfig, rng: random.Random):
+    """Yield shared-clock states; the hunter keeps moving while the bot thinks."""
+    engine = RoundEngine(config)
+    engine.update(simulated_dt=0.0)
+    next_decision = rng.uniform(*profile.think_time_range)
+    yield engine
+    while engine.outcome == Outcome.PLAYING:
+        engine.update(simulated_dt=1.0 / config.fps)
+        if engine.outcome == Outcome.PLAYING and engine.elapsed_s + 1e-10 >= next_decision:
+            legal = _legal_directions(engine)
+            if not legal:
+                engine.outcome = Outcome.TIMEOUT
+            else:
+                if rng.random() < profile.mistake_rate:
+                    direction = rng.choice(legal)
+                else:
+                    greedy = _greedy_direction(engine)
+                    direction = greedy if greedy and rng.random() < profile.greediness else rng.choice(legal)
+                engine.move_player(direction)
+                next_decision = engine.elapsed_s + rng.uniform(*profile.think_time_range)
+        yield engine
+
+
 def generate_dataset(n_per_profile: int = 120, db_path: str | None = None, seed: int = 0) -> int:
+    if n_per_profile < 1:
+        raise ValueError("rounds-per-profile must be positive")
     logger = RoundLogger(db_path=db_path) if db_path else RoundLogger()
     rng = random.Random(seed)
     total = 0

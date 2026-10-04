@@ -37,11 +37,14 @@ import os
 
 import joblib
 import numpy as np
-from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.model_selection import cross_val_score, train_test_split, StratifiedKFold
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import MinMaxScaler
 
-from data.preprocess import build_training_frame
+from data.preprocess import build_feature_frame
+from ml.artifacts import metadata, validate_bundle
 
 FEATURE_COLS = [
     "time_taken_s",
@@ -77,31 +80,50 @@ DIFFICULTY_BY_SKILL = {
 
 
 def train(db_path: str | None = None, k: int = 5, model_path: str = MODEL_PATH):
-    """Train KNN classifier on normalized telemetry logs with 5-fold cross-validation."""
+    """Evaluate raw telemetry with scaling fitted independently in each split."""
     global _MODEL_CACHE
-    df, scale_params = build_training_frame(db_path)
-    labelled = df.dropna(subset=["skill_label"])
+    df = build_feature_frame(db_path)
+    labelled = df[df["label_source"].isin(["synthetic", "verified"])].dropna(subset=["skill_label"])
+    counts = labelled["skill_label"].value_counts()
+    if len(counts) < 2 or counts.min() < 3 or len(labelled) < 10:
+        raise ValueError("KNN needs at least 10 labelled rounds, two skill classes, and 3 rounds per class")
 
     X = labelled[FEATURE_COLS].values
     y = labelled["skill_label"].values
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+    train_indices, test_indices = train_test_split(
+        np.arange(len(labelled)), test_size=max(len(counts), int(np.ceil(len(labelled) * 0.2))), random_state=42, stratify=y
     )
-
-    clf = KNeighborsClassifier(n_neighbors=k, metric="euclidean")
+    X_train, X_test = X[train_indices], X[test_indices]
+    y_train, y_test = y[train_indices], y[test_indices]
+    folds = min(5, int(counts.min()))
+    max_k = min(len(X_train), len(X) - int(np.ceil(len(X) / folds)))
+    if k < 1 or k > max_k:
+        raise ValueError(f"KNN k must be between 1 and {max_k} for the evaluation splits")
+    clf = make_pipeline(MinMaxScaler(), KNeighborsClassifier(n_neighbors=k, metric="euclidean"))
     clf.fit(X_train, y_train)
 
     y_pred = clf.predict(X_test)
     acc = accuracy_score(y_test, y_pred)
-    cv_scores = cross_val_score(clf, X, y, cv=5)
+    cv_scores = cross_val_score(clf, X, y, cv=StratifiedKFold(folds, shuffle=True, random_state=42), error_score="raise")
 
     print(f"KNN (k={k}) held-out accuracy: {acc:.3f}")
-    print(f"5-fold CV accuracy: {cv_scores.mean():.3f} +/- {cv_scores.std():.3f}")
-    print(classification_report(y_test, y_pred))
+    print(f"{folds}-fold CV accuracy: {cv_scores.mean():.3f} +/- {cv_scores.std():.3f}")
+    print(classification_report(y_test, y_pred, zero_division=0))
+    metrics = {"held_out_accuracy": float(acc), "cv_accuracy": float(cv_scores.mean())}
+    for is_bot, domain in [(1, "synthetic"), (0, "human")]:
+        mask = labelled.iloc[test_indices]["is_bot"].to_numpy() == is_bot
+        metrics[domain] = {"samples": int(mask.sum()), "accuracy": float(accuracy_score(y_test[mask], y_pred[mask])) if mask.any() else None}
+        print(f"{domain} held-out evaluation: {metrics[domain]}")
 
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    bundle = {"model": clf, "scale_params": scale_params, "features": FEATURE_COLS}
+    # Evaluation is complete; the deployment pipeline can now use all labelled rounds.
+    clf.fit(X, y)
+    scaler = clf.named_steps["minmaxscaler"]
+    scale_params = {c: {"min": float(lo), "max": float(hi)} for c, lo, hi in zip(FEATURE_COLS, scaler.data_min_, scaler.data_max_)}
+
+    os.makedirs(os.path.dirname(os.path.abspath(model_path)), exist_ok=True)
+    bundle = {"model": clf, "scale_params": scale_params, "features": FEATURE_COLS,
+              "metrics": metrics, "_path": model_path, **metadata()}
     joblib.dump(bundle, model_path)
     _MODEL_CACHE = bundle
     print(f"Saved model -> {model_path}")
@@ -111,24 +133,29 @@ def train(db_path: str | None = None, k: int = 5, model_path: str = MODEL_PATH):
 def predict_skill(feature_row: dict, model_path: str = MODEL_PATH) -> str:
     """Classify player skill based on unscaled telemetry features from a completed round."""
     global _MODEL_CACHE
-    from data.preprocess import apply_scale
-
-    if _MODEL_CACHE is None or getattr(_MODEL_CACHE, "_path", None) != model_path:
-        bundle = joblib.load(model_path)
+    if _MODEL_CACHE is None or _MODEL_CACHE.get("_path") != model_path:
+        bundle = validate_bundle(joblib.load(model_path))
         bundle["_path"] = model_path
         _MODEL_CACHE = bundle
     else:
         bundle = _MODEL_CACHE
 
-    clf, scale_params = bundle["model"], bundle["scale_params"]
-    scaled = apply_scale(feature_row, scale_params)
-    x = np.array([[scaled[c] for c in FEATURE_COLS]])
+    clf = bundle["model"]
+    x = np.array([[feature_row[c] for c in bundle["features"]]])
     return clf.predict(x)[0]
 
 
 def difficulty_for_skill(skill: str) -> dict:
     """Retrieve cadence tuning parameters corresponding to skill level."""
-    return DIFFICULTY_BY_SKILL.get(skill, DIFFICULTY_BY_SKILL["Intermediate"])
+    return dict(DIFFICULTY_BY_SKILL.get(skill, DIFFICULTY_BY_SKILL["Intermediate"]))
+
+
+def skill_from_history(rows: list, window: int = 5, default: str = "Beginner") -> str:
+    """Median recent tier prevents a single unusual round from changing difficulty."""
+    tiers = ["Beginner", "Intermediate", "Expert"]
+    labels = [r.get("predicted_skill") or r.get("skill_label") for r in rows[-window:]]
+    ranks = [tiers.index(label) for label in labels if label in tiers]
+    return tiers[int(np.median(ranks))] if ranks else default
 
 
 if __name__ == "__main__":

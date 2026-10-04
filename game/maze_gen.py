@@ -17,11 +17,12 @@ THEORETICAL FOUNDATION & LECTURE CONCEPTS:
        * Hard Constraint 3 (Solvability): Start (0, 0) and Exit (W-1, H-1) have
          a guaranteed path.
        * Soft Constraint 4 (Non-triviality): Shortest path length must be >=
-         min_path_ratio * theoretical_maximum_manhattan_span.
+         min_path_ratio * start-to-exit Manhattan distance (default stretch: 1.5).
 
 2. SPANNING TREE THEOREM & BACKTRACKING DFS:
    Randomized depth-first search over the dual grid graph G naturally synthesizes
-   a Uniform Spanning Tree (UST). Because a spanning tree on N vertices contains
+   a random spanning tree, biased toward long DFS corridors (not uniformly sampled).
+   Because a spanning tree on N vertices contains
    precisely N - 1 edges and no cycles:
      - Connectivity is guaranteed by construction.
      - A unique simple path exists between any arbitrary pair of nodes (u, v).
@@ -38,6 +39,7 @@ THEORETICAL FOUNDATION & LECTURE CONCEPTS:
 from __future__ import annotations
 
 import random
+import math
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -127,19 +129,25 @@ def _carve(maze: Maze, rng: random.Random) -> None:
 def generate_maze(
     width: int,
     height: int,
-    min_path_ratio: float = 0.6,
+    min_path_ratio: float = 1.5,
     seed: int | None = None,
     max_attempts: int = 50,
 ) -> Maze:
     """Generate a maze satisfying the CSP constraints.
 
-    min_path_ratio: the start->exit shortest path (in cells) must be at
-    least this fraction of the theoretical maximum manhattan span, so
-    rounds can't spawn start and exit next to each other.
+    min_path_ratio is a stretch factor over Manhattan distance, capped at
+    the maximum path length compatible with endpoint parity on tiny grids.
+    Raise an error if the requested constraint is not found within max_attempts.
     """
+    if width < 1 or height < 1 or max_attempts < 1:
+        raise ValueError("Dimensions and max_attempts must be positive")
+    if not math.isfinite(min_path_ratio) or min_path_ratio <= 0:
+        raise ValueError("min_path_ratio must be finite and positive")
     rng = random.Random(seed)
     theoretical_max = (width - 1) + (height - 1)
-    min_len = max(1, int(theoretical_max * min_path_ratio))
+    max_path = width * height - 1
+    max_path -= (max_path - theoretical_max) % 2
+    min_len = min(max_path, math.ceil(theoretical_max * min_path_ratio))
 
     for _ in range(max_attempts):
         maze = Maze(
@@ -164,9 +172,7 @@ def generate_maze(
         if path_len >= min_len:
             return maze
 
-    # Fell through every attempt (only possible on tiny mazes) — return
-    # the last one anyway rather than looping forever.
-    return maze
+    raise ValueError(f"Could not generate a maze with path length >= {min_len} in {max_attempts} attempts")
 
 
 if __name__ == "__main__":

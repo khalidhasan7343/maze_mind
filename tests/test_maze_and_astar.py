@@ -13,11 +13,23 @@ def test_maze_fully_connected():
 
 
 def test_maze_solvable_and_nontrivial():
-    maze = generate_maze(12, 12, seed=2, min_path_ratio=0.6)
+    maze = generate_maze(12, 12, seed=2, min_path_ratio=1.5)
     path_len = maze.shortest_path_len(maze.start, maze.exit)
     assert path_len > 0
     theoretical_max = (maze.width - 1) + (maze.height - 1)
-    assert path_len >= 0.6 * theoretical_max
+    assert path_len >= 1.5 * theoretical_max
+
+
+@pytest.mark.parametrize("size", [(2, 2), (2, 3), (1, 1), (1, 5)])
+def test_tiny_mazes_are_supported(size):
+    maze = generate_maze(*size, seed=2)
+    assert maze.shortest_path_len(maze.start, maze.exit) >= 0
+
+
+@pytest.mark.parametrize("kwargs", [{"width": 0, "height": 3}, {"width": 3, "height": 3, "max_attempts": 0}])
+def test_invalid_maze_configuration(kwargs):
+    with pytest.raises(ValueError):
+        generate_maze(**kwargs)
 
 
 def test_maze_deterministic_with_seed():
@@ -90,4 +102,3 @@ def test_hunter_fsm_awakening_and_stun():
         assert not moved  # Immobilized during stun
 
     assert hunter.is_stunned is False
-

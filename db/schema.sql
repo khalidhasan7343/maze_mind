@@ -20,8 +20,25 @@ CREATE TABLE IF NOT EXISTS rounds (
     hunter_replan_ms    INTEGER NOT NULL,
     hunter_move_ms      INTEGER NOT NULL,
     skill_label         TEXT,                -- Beginner/Intermediate/Expert, if known
+    label_source        TEXT NOT NULL DEFAULT 'unknown', -- synthetic / verified / unknown
+    predicted_skill     TEXT,
+    predicted_style     TEXT,
+    model_version       TEXT,
+    remaining_path_len  INTEGER,
+    telemetry_version   INTEGER NOT NULL DEFAULT 2,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_rounds_session ON rounds(session_id);
 CREATE INDEX IF NOT EXISTS idx_rounds_outcome ON rounds(outcome);
+CREATE INDEX IF NOT EXISTS idx_rounds_player ON rounds(player_tag, round_id);
+
+CREATE TABLE IF NOT EXISTS round_snapshots (
+    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id INTEGER NOT NULL REFERENCES rounds(round_id),
+    dist_to_hunter REAL NOT NULL,
+    dist_to_exit REAL NOT NULL,
+    time_left_ratio REAL NOT NULL,
+    efficiency REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_snapshots_round ON round_snapshots(round_id);

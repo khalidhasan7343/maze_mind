@@ -81,11 +81,13 @@ def test_engine_simulated_dt():
 def test_hunter_replans_when_path_depleted():
     maze = generate_maze(6, 6, seed=123)
     hunter = Hunter(position=(0, 0), replan_interval=100, move_interval=1)
-    hunter._path = [(0, 0), (1, 0)]
+    hunter.detection_radius = 100
+    initial_path = astar_path(maze, (0, 0), (3, 3))[:2]
+    hunter._path = initial_path.copy()
 
     # Frame 1: moves to (1, 0), path depleted to [(1, 0)] (len 1)
     hunter.update(maze, player_position=(3, 3))
-    assert hunter.position == (1, 0)
+    assert hunter.position == initial_path[1]
     assert len(hunter._path) == 1
 
     # Frame 2: since len(_path) <= 1, it should replan immediately even though frame != replan_interval
@@ -124,41 +126,15 @@ def test_logger_update_skill_label_and_fetch_by_player(temp_db):
     assert bobs_updated[0]["skill_label"] == "Expert"
 
 
-def test_predict_skill_and_style_live():
-    from ml.knn_skill import predict_skill, MODEL_PATH as KNN_PATH
-    from ml.kmeans_strategy import predict_style, MODEL_PATH as KMEANS_PATH
-    from ml.logreg_winprob import predict_win_probability, MODEL_PATH as LOGREG_PATH
+def test_predict_skill_and_style_live(trained_models):
+    from ml.knn_skill import predict_skill
+    from ml.kmeans_strategy import predict_style
+    from ml.logreg_winprob import predict_win_probability
 
-    # If models exist, test that live prediction functions work without error
-    if os.path.exists(KNN_PATH):
-        feats = {
-            "time_taken_s": 15.0,
-            "efficiency_ratio": 0.85,
-            "backtracks": 1,
-            "avg_decision_time_s": 0.25,
-            "decision_time_variance": 0.02,
-            "outcome_code": 0,
-        }
-        res = predict_skill(feats)
-        assert res in ("Beginner", "Intermediate", "Expert")
-
-    if os.path.exists(KMEANS_PATH):
-        feats = {
-            "time_taken_s": 15.0,
-            "efficiency_ratio": 0.85,
-            "backtracks": 1,
-            "avg_decision_time_s": 0.25,
-            "decision_time_variance": 0.02,
-        }
-        style = predict_style(feats)
-        assert isinstance(style, str) and len(style) > 0
-
-    if os.path.exists(LOGREG_PATH):
-        feats = {
-            "dist_to_hunter": 6,
-            "dist_to_exit": 3,
-            "time_left_ratio": 0.75,
-            "efficiency": 0.9,
-        }
-        wp = predict_win_probability(feats)
-        assert 0.0 <= wp <= 1.0
+    features = {"time_taken_s": 15.0, "efficiency_ratio": 0.85, "backtracks": 1,
+                "avg_decision_time_s": 0.25, "decision_time_variance": 0.02, "outcome_code": 0}
+    assert predict_skill(features, trained_models["knn"]) in ("Beginner", "Intermediate", "Expert")
+    assert isinstance(predict_style(features, trained_models["kmeans"]), str)
+    probability = predict_win_probability({"dist_to_hunter": 6, "dist_to_exit": 3,
+                                           "time_left_ratio": 0.75, "efficiency": 0.9}, trained_models["logreg"])
+    assert 0 <= probability <= 1

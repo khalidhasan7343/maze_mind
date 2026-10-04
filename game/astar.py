@@ -148,6 +148,7 @@ class Hunter:
 
         self._frame = 0
         self._path: list[tuple[int, int]] = []
+        self._target = None
         self._nodes_expanded_last = 0
 
     @property
@@ -212,8 +213,10 @@ class Hunter:
             return False
 
         # State 3: Evaluate Patrol vs. Pursuit transitions
-        dist_to_player = manhattan(self.position, player_position)
-        if dist_to_player <= self.detection_radius:
+        # Walls and winding corridors block detection; nearby map coordinates
+        # alone do not reveal a player on the other side of the maze.
+        dist_to_player = maze.shortest_path_len(self.position, player_position)
+        if 0 <= dist_to_player <= self.detection_radius:
             self.state = HunterState.PURSUIT
             active_move_interval = self.move_interval
             target_pos = player_position
@@ -230,8 +233,9 @@ class Hunter:
             target_pos = self.patrol_target
 
         # Dynamic A* Path Re-planning
-        if self._frame % self.replan_interval == 0 or len(self._path) <= 1:
+        if self._frame % self.replan_interval == 0 or len(self._path) <= 1 or (self._target != target_pos and self.state == HunterState.PATROL):
             self._path = astar_path(maze, self.position, target_pos)
+            self._target = target_pos
 
         # Discrete Grid Movement Step
         if self._frame % active_move_interval == 0 and len(self._path) > 1:
@@ -243,7 +247,7 @@ class Hunter:
 
     def caught(self, player_position: tuple[int, int]) -> bool:
         """Check collision intersection with the player."""
-        return self.position == player_position
+        return self.position == player_position and self.state not in (HunterState.AWAKENING, HunterState.STUNNED)
 
 
 # Backward compatibility alias

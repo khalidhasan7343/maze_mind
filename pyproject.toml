@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "maze-mind"
+version = "0.2.0"
+description = "A maze runner with adaptive AI and a telemetry learning pipeline"
+readme = "README.md"
+requires-python = ">=3.12"
+dynamic = ["dependencies"]
+
+[project.scripts]
+maze-mind = "main:main"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["game*", "data*", "ml*", "dashboard*", "db*"]
+
+[tool.setuptools.package-data]
+db = ["schema.sql"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}

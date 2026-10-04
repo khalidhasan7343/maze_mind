@@ -6,8 +6,8 @@ THEORETICAL FOUNDATION & LECTURE CONCEPTS:
 ===============================================================================
 1. FEATURE EXTRACTION PIPELINE:
    Raw temporal and spatial events are transformed into structured feature vectors:
-     - Efficiency Ratio: eta = |path_optimal| / |path_player| in (0, 1].
-       Measures topological optimality and dead-end avoidance.
+     - Efficiency Ratio: net progress toward the exit / steps taken in [0, 1].
+       On escaped rounds this equals optimal path length / steps taken.
      - Backtrack Frequency: Count of immediate reversals (path[t] == path[t-2]).
        Indicates spatial disorientation or dead-end entrapment.
      - Latency Distribution Moments:
@@ -69,6 +69,7 @@ def _repair_or_drop(df: pd.DataFrame) -> pd.DataFrame:
     df = df[df["player_path_len"] > 0].copy()
     df = df.dropna(subset=["time_taken_s", "player_path_len", "optimal_path_len"])
     df = df[df["outcome"].isin(OUTCOME_MAP.keys())].copy()
+    df = df[(df["time_taken_s"] >= 0) & (df["optimal_path_len"] >= 0)].copy()
     dropped = before - len(df)
     if dropped:
         print(f"[preprocess] dropped {dropped} incomplete round(s)")
@@ -90,12 +91,16 @@ def extract_round_features(row: dict) -> dict:
         times = []
 
     path_len = max(1, row.get("player_path_len", 1))
-    optimal_len = row.get("optimal_path_len", path_len)
+    optimal_len = max(0, row.get("optimal_path_len", path_len))
     outcome_str = row.get("outcome", "timeout")
+    remaining = row.get("remaining_path_len")
+    if remaining is None or pd.isna(remaining):
+        remaining = 0 if outcome_str == "escaped" else optimal_len
+    progress = max(0, optimal_len - remaining)
 
     return {
         "time_taken_s": float(row.get("time_taken_s", 0.0)),
-        "efficiency_ratio": float(optimal_len / path_len),
+        "efficiency_ratio": float(min(1.0, progress / path_len)),
         "backtracks": int(row.get("backtracks", 0)),
         "avg_decision_time_s": float(row.get("avg_decision_time_s", 0.0)),
         "decision_time_variance": float(np.var(times)) if len(times) > 1 else 0.0,
@@ -108,7 +113,9 @@ def extract_round_features(row: dict) -> dict:
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _repair_or_drop(df)
 
-    df["efficiency_ratio"] = df["optimal_path_len"] / df["player_path_len"]
+    remaining = df.get("remaining_path_len", pd.Series(np.nan, index=df.index))
+    remaining = remaining.fillna(df["optimal_path_len"].where(df["outcome"] != "escaped", 0))
+    df["efficiency_ratio"] = ((df["optimal_path_len"] - remaining).clip(lower=0) / df["player_path_len"]).clip(upper=1)
     df["maze_size"] = df["maze_width"] * df["maze_height"]
     df["outcome_code"] = df["outcome"].map(OUTCOME_MAP)
 
@@ -150,17 +157,40 @@ def apply_scale(row: dict, scale_params: dict) -> dict:
     return scaled
 
 
+def build_feature_frame(db_path: str | None = None, current_only: bool = True) -> pd.DataFrame:
+    """Engineered, unscaled data. Supervised callers split before fitting scalers."""
+    raw = load_raw_dataframe(db_path)
+    if raw.empty:
+        raise ValueError("No rounds logged yet — run python main.py simulate first")
+    if current_only:
+        raw = raw[raw["telemetry_version"] == 2]
+    engineered = engineer_features(raw)
+    if engineered.empty:
+        raise ValueError("No valid current telemetry — generate new rounds with python main.py simulate")
+    numeric_cols = RAW_NUMERIC_FEATURES + ["decision_time_variance"]
+    engineered = engineered.replace([np.inf, -np.inf], np.nan).dropna(subset=numeric_cols)
+    if engineered.empty:
+        raise ValueError("No finite training features")
+    return engineered
+
+
+def scale_frame(df: pd.DataFrame, scale_params: dict) -> pd.DataFrame:
+    """Transform a frame using the model's saved training scale."""
+    out = df.copy()
+    for col, params in scale_params.items():
+        if col in out:
+            out[col] = (out[col] - params["min"]) / (params["max"] - params["min"] or 1.0)
+    return out
+
+
 def build_training_frame(db_path: str | None = None) -> tuple:
     """Full pipeline: raw rows -> engineered -> normalised.
     Returns (normalized_df, scale_params)."""
-    raw = load_raw_dataframe(db_path)
-    if raw.empty:
-        raise ValueError("No rounds logged yet — run data/simulate.py first")
-    engineered = engineer_features(raw)
+    engineered = build_feature_frame(db_path)
     encode_cols = ["outcome_code"]  # categorical, encoded not scaled
     numeric_cols = RAW_NUMERIC_FEATURES + ["decision_time_variance"]
     normalized, scale_params = min_max_normalize(engineered, numeric_cols)
-    keep = numeric_cols + encode_cols + ["skill_label", "player_tag", "session_id"]
+    keep = numeric_cols + encode_cols + ["skill_label", "player_tag", "session_id", "is_bot", "label_source", "predicted_skill"]
     return normalized[keep], scale_params
 
 

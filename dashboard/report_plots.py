@@ -39,7 +39,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from data.preprocess import build_training_frame
+from data.preprocess import build_feature_frame, scale_frame
+from ml.artifacts import validate_bundle
 from game.astar import astar_path
 from game.maze_gen import generate_maze
 
@@ -53,7 +54,7 @@ def _ensure_dir():
 
 def plot_elbow_curve(kmeans_model_path: str = DEFAULT_KMEANS_PATH):
     _ensure_dir()
-    bundle = joblib.load(kmeans_model_path)
+    bundle = validate_bundle(joblib.load(kmeans_model_path))
     elbow = bundle["elbow"]
     ks = sorted(elbow.keys())
     inertias = [elbow[k] for k in ks]
@@ -71,12 +72,12 @@ def plot_elbow_curve(kmeans_model_path: str = DEFAULT_KMEANS_PATH):
     return path
 
 
-def plot_pca_clusters(kmeans_model_path: str = DEFAULT_KMEANS_PATH):
+def plot_pca_clusters(kmeans_model_path: str = DEFAULT_KMEANS_PATH, db_path: str | None = None):
     _ensure_dir()
-    bundle = joblib.load(kmeans_model_path)
+    bundle = validate_bundle(joblib.load(kmeans_model_path))
     km, pca, features, cluster_names = bundle["model"], bundle["pca"], bundle["features"], bundle["cluster_names"]
 
-    df, _ = build_training_frame()
+    df = scale_frame(build_feature_frame(db_path), bundle["scale_params"])
     X = df[features].values
     coords = pca.transform(X)
     labels = km.predict(X)
@@ -132,13 +133,13 @@ def plot_astar_benchmarks(sizes=(6, 8, 10, 12, 16, 20, 24), trials=8):
 
 def plot_skill_breakdown():
     _ensure_dir()
-    df, _ = build_training_frame()
+    df = build_feature_frame()
     counts = df["skill_label"].value_counts().reindex(["Beginner", "Intermediate", "Expert"]).fillna(0)
 
     fig, ax = plt.subplots(figsize=(5, 4))
     ax.bar(counts.index, counts.values, color=["#93c5fd", "#3b82f6", "#1d4ed8"])
     ax.set_ylabel("Rounds")
-    ax.set_title("Logged rounds by KNN skill class")
+    ax.set_title("Logged rounds by labelled skill class")
     fig.tight_layout()
     path = os.path.join(FIG_DIR, "skill_breakdown.png")
     fig.savefig(path, dpi=150)

@@ -70,9 +70,11 @@ def test_min_max_normalize_constant_column_no_division_by_zero():
     assert not normed["x"].isna().any()
 
 
-def test_cmd_records_cli(capsys):
+def test_cmd_records_cli(capsys, monkeypatch, temp_db):
     import argparse
     from main import cmd_records
+    logger = RoundLogger(temp_db)
+    monkeypatch.setattr("data.logger.RoundLogger", lambda: logger)
     args = argparse.Namespace(tag="player1")
     cmd_records(args)
     captured = capsys.readouterr()

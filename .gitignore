@@ -4,3 +4,7 @@ db/*.db
 ml/models/*.joblib
 dashboard/figures/*.png
 .venv/
+.pytest_cache/
+*.egg-info/
+build/
+dist/

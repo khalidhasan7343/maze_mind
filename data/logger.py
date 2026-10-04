@@ -54,6 +54,12 @@ class RoundRecord:
     hunter_replan_ms: int = 0
     hunter_move_ms: int = 0
     skill_label: str | None = None
+    label_source: str = "unknown"
+    predicted_skill: str | None = None
+    predicted_style: str | None = None
+    model_version: str | None = None
+    remaining_path_len: int | None = None
+    telemetry_version: int = 2
 
     @property
     def avg_decision_time_s(self) -> float:
@@ -65,7 +71,7 @@ class RoundRecord:
 class RoundLogger:
     def __init__(self, db_path: str = _DEFAULT_DB_PATH):
         self.db_path = db_path
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -73,17 +79,29 @@ class RoundLogger:
             schema = f.read()
         with self._connect() as conn:
             conn.executescript(schema)
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(rounds)")}
+            additions = {
+                "label_source": "TEXT NOT NULL DEFAULT 'unknown'",
+                "predicted_skill": "TEXT", "predicted_style": "TEXT",
+                "model_version": "TEXT", "remaining_path_len": "INTEGER",
+                "telemetry_version": "INTEGER NOT NULL DEFAULT 1",
+            }
+            for name, definition in additions.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE rounds ADD COLUMN {name} {definition}")
+            conn.execute("UPDATE rounds SET label_source = 'synthetic' WHERE is_bot = 1 AND skill_label IS NOT NULL AND label_source = 'unknown'")
 
     @contextmanager
     def _connect(self):
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
         try:
             with conn:
                 yield conn
         finally:
             conn.close()
 
-    def log_round(self, record: RoundRecord) -> int:
+    def log_round(self, record: RoundRecord, snapshots: list[dict] | None = None) -> int:
         with self._connect() as conn:
             cur = conn.execute(
                 """
@@ -92,8 +110,9 @@ class RoundLogger:
                     optimal_path_len, dead_end_count, player_path_len,
                     time_taken_s, backtracks, decision_times_s,
                     avg_decision_time_s, outcome, hunter_replan_ms,
-                    hunter_move_ms, skill_label
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    hunter_move_ms, skill_label, label_source, predicted_skill,
+                    predicted_style, model_version, remaining_path_len, telemetry_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.session_id,
@@ -112,16 +131,59 @@ class RoundLogger:
                     record.hunter_replan_ms,
                     record.hunter_move_ms,
                     record.skill_label,
+                    record.label_source,
+                    record.predicted_skill,
+                    record.predicted_style,
+                    record.model_version,
+                    record.remaining_path_len,
+                    record.telemetry_version,
                 ),
             )
+            if snapshots:
+                conn.executemany(
+                    "INSERT INTO round_snapshots (round_id, dist_to_hunter, dist_to_exit, time_left_ratio, efficiency) VALUES (?, ?, ?, ?, ?)",
+                    [(cur.lastrowid, s["dist_to_hunter"], s["dist_to_exit"], s["time_left_ratio"], s["efficiency"]) for s in snapshots],
+                )
             return cur.lastrowid
 
     def update_skill_label(self, round_id: int, skill_label: str) -> None:
+        """Set a verified ground-truth label; predictions use update_predictions."""
+        if skill_label not in {"Beginner", "Intermediate", "Expert"}:
+            raise ValueError("Unknown skill label")
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE rounds SET skill_label = ? WHERE round_id = ?",
+            cursor = conn.execute(
+                "UPDATE rounds SET skill_label = ?, label_source = 'verified' WHERE round_id = ?",
                 (skill_label, round_id),
             )
+            if not cursor.rowcount:
+                raise ValueError(f"Round {round_id} does not exist")
+
+    def update_predictions(self, round_id: int, skill: str | None, style: str | None, model_version: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE rounds SET predicted_skill = ?, predicted_style = ?, model_version = ? WHERE round_id = ?",
+                (skill, style, model_version, round_id),
+            )
+
+    def log_snapshots(self, round_id: int, snapshots: list[dict]) -> None:
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT INTO round_snapshots (round_id, dist_to_hunter, dist_to_exit, time_left_ratio, efficiency) VALUES (?, ?, ?, ?, ?)",
+                [(round_id, s["dist_to_hunter"], s["dist_to_exit"], s["time_left_ratio"], s["efficiency"]) for s in snapshots],
+            )
+
+    def fetch_snapshots(self) -> list[dict]:
+        with self._connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT s.*, r.is_bot, CASE WHEN r.outcome = 'escaped' THEN 1 ELSE 0 END AS won
+                FROM round_snapshots s JOIN rounds r ON r.round_id = s.round_id
+                WHERE r.telemetry_version = 2 ORDER BY s.snapshot_id
+            """).fetchall()
+            result = [dict(r) for r in rows]
+            for row in result:
+                row["round_id"] = f"logged-{row['round_id']}"
+            return result
 
     def fetch_all(self) -> list:
         with self._connect() as conn:
@@ -145,17 +207,15 @@ class RoundLogger:
     def get_player_summary(self, player_tag: str | None = None) -> dict:
         """Aggregate career statistics and recent match logs for a player."""
         rounds = []
-        if player_tag:
+        if player_tag is not None:
             rounds = self.fetch_by_player(player_tag)
 
-        # Fallback to all human rounds or all rounds if tag has no direct rows
-        if not rounds:
+        # Omitting the tag explicitly requests global human statistics.
+        if player_tag is None:
             with self._connect() as conn:
                 conn.row_factory = sqlite3.Row
                 rows = conn.execute("SELECT * FROM rounds WHERE is_bot = 0 ORDER BY round_id ASC").fetchall()
                 rounds = [dict(r) for r in rows]
-            if not rounds:
-                rounds = self.fetch_all()
 
         if not rounds:
             return {

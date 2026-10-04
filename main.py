@@ -29,50 +29,20 @@ def cmd_play(args):
     from game.engine import RoundConfig
     from game.ui.pygame_ui import run_round
     from data.logger import RoundLogger
-    from data.preprocess import extract_round_features
+    from ml.knn_skill import skill_from_history
 
     logger = RoundLogger()
-    skill_hint = None
-
-    # If a model exists, size the round's difficulty off the player's
-    # rolling history; otherwise fall back to a sane default. This is
-    # the ADAPT step: skill class feeds back into hunter speed/re-plan.
-    try:
-        from ml.knn_skill import difficulty_for_skill
-        history = logger.fetch_by_player(args.tag)
-        if history:
-            recent_skill = history[-1].get("skill_label") or "Intermediate"
-        else:
-            recent_skill = "Intermediate"
-        skill_hint = recent_skill
-        diff = difficulty_for_skill(recent_skill)
-    except Exception:
-        diff = {"hunter_replan_interval": 20, "hunter_move_interval": 28, "awakening_duration_s": 2.5}
+    skill_hint = skill_from_history(logger.fetch_by_player(args.tag))
 
     config = RoundConfig(
         width=args.width,
         height=args.height,
         round_time_limit_s=args.time_limit,
-        hunter_replan_interval=diff["hunter_replan_interval"],
-        hunter_move_interval=diff["hunter_move_interval"],
-        awakening_duration_s=diff.get("awakening_duration_s", 2.5),
+        seed=args.seed,
     )
-    outcome = run_round(config, player_tag=args.tag, skill_hint=skill_hint, logger=logger)
+    outcome = run_round(config, player_tag=args.tag, skill_hint=skill_hint, logger=logger,
+                        initial_tier=args.difficulty)
     print(f"Round finished: {outcome.value}")
-
-    # Re-classify this player's skill from their updated history and persist to DB
-    # so the *next* round adapts (only meaningful once a model has been trained).
-    try:
-        from ml.knn_skill import predict_skill
-        rows = logger.fetch_by_player(args.tag)
-        if rows:
-            last = rows[-1]
-            feature_row = extract_round_features(last)
-            predicted = predict_skill(feature_row)
-            logger.update_skill_label(last["round_id"], predicted)
-            print(f"Predicted skill class for next round: {predicted}")
-    except Exception as e:
-        print(f"(Skill prediction skipped — train models first: {e})")
 
 
 def cmd_simulate(args):
@@ -132,9 +102,16 @@ def cmd_records(args):
             opt = r.get("optimal_path_len", 0)
             act = max(1, r.get("player_path_len", 1))
             eff = f"{min(100, int(100 * opt / act))}%" if r.get("outcome") == "escaped" else "N/A"
-            skill = r.get("skill_label") or "Beginner"
+            skill = r.get("predicted_skill") or r.get("skill_label") or "Unrated"
             print(f" {r_id:<6} {sec:<8} {out:<10} {t:<8} {steps:<12} {eff:<12} {skill:<12}")
     print(f"{'=' * 75}\n")
+
+
+def cmd_label(args):
+    """Record an independently reviewed skill label for supervised training."""
+    from data.logger import RoundLogger
+    RoundLogger().update_skill_label(args.round_id, args.skill)
+    print(f"Round {args.round_id} verified as {args.skill}.")
 
 
 def main():
@@ -146,6 +123,8 @@ def main():
     p_play.add_argument("--width", type=int, default=14)
     p_play.add_argument("--height", type=int, default=14)
     p_play.add_argument("--time-limit", type=float, default=60.0)
+    p_play.add_argument("--difficulty", choices=["Recruit", "Runner", "Master", "Adaptive", "Custom"], default="Recruit")
+    p_play.add_argument("--seed", type=int, default=None, help="Reproduce a maze")
     p_play.set_defaults(func=cmd_play)
 
     p_sim = sub.add_parser("simulate", help="Generate synthetic bot rounds")
@@ -162,8 +141,16 @@ def main():
     p_records.add_argument("--tag", default="player1", help="Player tag to inspect")
     p_records.set_defaults(func=cmd_records)
 
+    p_label = sub.add_parser("label", help="Set a verified skill label for a reviewed round")
+    p_label.add_argument("--round-id", type=int, required=True)
+    p_label.add_argument("--skill", choices=["Beginner", "Intermediate", "Expert"], required=True)
+    p_label.set_defaults(func=cmd_label)
+
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except (ValueError, FileNotFoundError) as exc:
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":

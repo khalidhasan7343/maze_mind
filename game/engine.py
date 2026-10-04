@@ -30,8 +30,10 @@ THEORETICAL FOUNDATION & DESIGN PATTERNS:
 from __future__ import annotations
 
 import time
+import math
 from dataclasses import dataclass, field
 from enum import Enum
+from collections import deque
 
 from .astar import Hunter, HunterState, astar_path
 from .maze_gen import Maze, generate_maze
@@ -59,6 +61,17 @@ class RoundConfig:
     dash_cooldown_s: float = 8.0
     fps: int = 30
     seed: int | None = None
+    route_guide: bool = False
+
+    def __post_init__(self):
+        if self.width < 2 or self.height < 2:
+            raise ValueError("Maze width and height must be at least 2")
+        if self.fps <= 0 or not math.isfinite(self.round_time_limit_s) or self.round_time_limit_s < 0:
+            raise ValueError("FPS must be positive and the time limit must be finite and nonnegative")
+        if min(self.hunter_replan_interval, self.hunter_move_interval) < 1:
+            raise ValueError("Hunter intervals must be positive")
+        if min(self.smoke_charges, self.radar_charges, self.dash_cooldown_s, self.awakening_duration_s) < 0:
+            raise ValueError("Ability charges and durations cannot be negative")
 
 
 class PlayerEntity:
@@ -111,9 +124,9 @@ class PlayerEntity:
         if self.radar_cooldown_frames > 0:
             self.radar_cooldown_frames -= 1
 
-    def record_move(self, new_pos: tuple[int, int], direction: str) -> None:
+    def record_move(self, new_pos: tuple[int, int], direction: str, timestamp: float | None = None) -> None:
         """Log legal position transition and evaluate backtrack heuristics."""
-        now = time.monotonic()
+        now = time.monotonic() if timestamp is None else timestamp
         self.decision_times_s.append(now - self._last_decision_ts)
         self._last_decision_ts = now
         self.last_move_direction = direction
@@ -131,6 +144,9 @@ class RoundEngine:
 
     def __init__(self, config: RoundConfig):
         self.config = config
+        self.elapsed_s = 0.0
+        self._simulated = False
+        self._tick_accumulator = 0.0
         self.maze: Maze = generate_maze(config.width, config.height, seed=config.seed)
         self.player = PlayerEntity(
             self.maze.start,
@@ -139,6 +155,7 @@ class RoundEngine:
             radar_charges=config.radar_charges,
             dash_cooldown_s=config.dash_cooldown_s,
         )
+        self.player._last_decision_ts = 0.0
         self.hunter = Hunter(
             position=self._far_corner_from_start(),
             replan_interval=config.hunter_replan_interval,
@@ -149,6 +166,7 @@ class RoundEngine:
         self.outcome = Outcome.PLAYING
         self.frame = 0
         self.start_time = time.monotonic()
+        self._last_update_ts = self.start_time
         self.elapsed_s = 0.0
 
         # Pause system state
@@ -162,6 +180,10 @@ class RoundEngine:
     def pause(self) -> None:
         """Pause the active round, freezing game timers and entity updates."""
         if self.outcome == Outcome.PLAYING and not self.is_paused:
+            if not self._simulated:
+                self.update()
+            if self.outcome != Outcome.PLAYING:
+                return
             self.is_paused = True
             self._pause_start_ts = time.monotonic()
 
@@ -170,6 +192,7 @@ class RoundEngine:
         if self.is_paused:
             self.is_paused = False
             self.total_paused_s += time.monotonic() - self._pause_start_ts
+            self._last_update_ts = time.monotonic()
             self._pause_start_ts = 0.0
 
     def toggle_pause(self) -> bool:
@@ -210,12 +233,32 @@ class RoundEngine:
         self.player._last_decision_ts = val
 
     def _far_corner_from_start(self) -> tuple[int, int]:
-        """Place Hunter in an opposite quadrant away from both Start and Exit."""
-        sx, sy = self.maze.start
-        w, h = self.maze.width, self.maze.height
-        corners = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]
-        corners = [c for c in corners if c != self.maze.exit and c != (sx, sy)]
-        return corners[0] if corners else (w - 1, h - 1)
+        """Spawn in a side corridor, rather than blocking the unique escape route."""
+        route = astar_path(self.maze, self.maze.start, self.maze.exit)
+        distances = {cell: 0 for cell in route}
+        queue = deque(route)
+        while queue:
+            cell = queue.popleft()
+            for neighbor in self.maze.neighbors(*cell):
+                if neighbor not in distances:
+                    distances[neighbor] = distances[cell] + 1
+                    queue.append(neighbor)
+        candidates = [cell for cell, distance in distances.items() if distance > 0]
+        if not candidates:
+            candidates = [cell for cell in route if cell not in (self.maze.start, self.maze.exit)]
+        if not candidates:
+            return self.maze.exit
+        return max(candidates, key=lambda cell: (distances[cell], self.maze.shortest_path_len(self.maze.start, cell)))
+
+    def _prepare_action(self) -> bool:
+        if self.outcome != Outcome.PLAYING or self.is_paused:
+            return False
+        if not self._simulated:
+            self.update()
+        return self.outcome == Outcome.PLAYING
+
+    def _record_move(self, new_pos, direction):
+        self.player.record_move(new_pos, direction, timestamp=self.elapsed_s)
 
     def move_player(self, direction: str) -> bool:
         """Attempt discrete cardinal movement for the player entity.
@@ -226,7 +269,7 @@ class RoundEngine:
         Returns:
             True if the passage was unblocked and position updated, False if wall blocked.
         """
-        if self.outcome != Outcome.PLAYING:
+        if not self._prepare_action() or direction not in self.maze.DIRS:
             return False
 
         x, y = self.player.position
@@ -235,12 +278,12 @@ class RoundEngine:
 
         dx, dy = self.maze.DIRS[direction]
         new_pos = (x + dx, y + dy)
-        self.player.record_move(new_pos, direction)
+        self._record_move(new_pos, direction)
 
         # Check terminal state conditions
         if self.player.position == self.maze.exit:
             self.outcome = Outcome.ESCAPED
-        elif self.player.position == self.hunter.position:
+        elif self.hunter.caught(self.player.position):
             self.outcome = Outcome.CAUGHT
 
         return True
@@ -253,7 +296,7 @@ class RoundEngine:
           - 'smoke': Deploy smoke trap to stun Hunter for 3.0 seconds.
           - 'radar': Spatial echo revealing distance and orientation toward Exit.
         """
-        if self.outcome != Outcome.PLAYING:
+        if not self._prepare_action():
             return False
 
         if ability_name == "dash":
@@ -275,18 +318,18 @@ class RoundEngine:
                     break
                 dx, dy = self.maze.DIRS[dash_dir]
                 new_pos = (x + dx, y + dy)
-                self.player.record_move(new_pos, dash_dir)
+                self._record_move(new_pos, dash_dir)
                 moved_any = True
                 if self.player.position == self.maze.exit:
                     self.outcome = Outcome.ESCAPED
                     break
-                if self.player.position == self.hunter.position:
+                if self.hunter.caught(self.player.position):
                     self.outcome = Outcome.CAUGHT
                     break
 
             if moved_any:
                 self.player.dash_cooldown_frames = self.player.dash_cooldown_max
-                self.recent_events.append({"text": "BURST DASH!", "time": time.monotonic()})
+                self.recent_events.append({"text": "BURST DASH!", "time": self.elapsed_s})
                 return True
             return False
 
@@ -295,7 +338,7 @@ class RoundEngine:
                 return False
             self.player.smoke_charges -= 1
             self.hunter.stun(duration_s=3.0)
-            self.recent_events.append({"text": "HUNTER STUNNED (3.0s)!", "time": time.monotonic()})
+            self.recent_events.append({"text": "HUNTER STUNNED (3.0s)!", "time": self.elapsed_s})
             return True
 
         elif ability_name == "radar":
@@ -328,36 +371,62 @@ class RoundEngine:
             }
             self.recent_events.append({
                 "text": f"RADAR: Exit is {dist_exit} cells {heading}",
-                "time": time.monotonic(),
+                "time": self.elapsed_s,
             })
             return info
 
         return False
 
+    def route_guide_path(self) -> list[tuple[int, int]]:
+        """A short, updating trail teaches navigation without revealing the whole solution."""
+        return astar_path(self.maze, self.player_pos, self.maze.exit)[1:7] if self.config.route_guide else []
+
+    @property
+    def route_progress(self) -> float:
+        optimal = self.maze.shortest_path_len(self.maze.start, self.maze.exit)
+        remaining = self.maze.shortest_path_len(self.player_pos, self.maze.exit)
+        return max(0.0, min(1.0, 1.0 - remaining / max(1, optimal)))
+
     def update(self, simulated_dt: float | None = None) -> Outcome:
-        """Advance simulation tick: update entity states, timers, and collisions."""
+        """Advance a shared clock; entity ticks remain independent of rendering FPS."""
         if self.outcome != Outcome.PLAYING or self.is_paused:
             return self.outcome
 
-        self.frame += 1
+        now = time.monotonic()
         if simulated_dt is not None:
-            self.elapsed_s += simulated_dt
+            if not math.isfinite(simulated_dt) or simulated_dt < 0:
+                raise ValueError("Simulation delta must be finite and nonnegative")
+            self._simulated = True
+            remaining = simulated_dt
         else:
-            self.elapsed_s = time.monotonic() - self.start_time - self.total_paused_s
+            remaining = max(0.0, now - self._last_update_ts)
+        self._last_update_ts = now
+        tick_s = 1.0 / self.config.fps
+        while remaining > 1e-10 and self.outcome == Outcome.PLAYING:
+            step = min(remaining, tick_s - self._tick_accumulator,
+                       max(0.0, self.config.round_time_limit_s - self.elapsed_s))
+            self.elapsed_s += step
+            self._tick_accumulator += step
+            remaining -= step
+            if self._tick_accumulator >= tick_s - 1e-10:
+                self._tick_accumulator = 0.0
+                self.frame += 1
+                self.player.update_cooldowns()
+                self.hunter.update(self.maze, self.player.position)
+                if self.hunter.caught(self.player.position):
+                    self.outcome = Outcome.CAUGHT
+            if self.elapsed_s >= self.config.round_time_limit_s - 1e-10:
+                self.elapsed_s = self.config.round_time_limit_s
+                if self.outcome == Outcome.PLAYING:
+                    self.outcome = Outcome.TIMEOUT
 
-        # Update entity timers & cooldowns
-        self.player.update_cooldowns()
-        self.hunter.update(self.maze, self.player.position)
-
-        # Collision & Timeout evaluations
         if self.hunter.caught(self.player.position):
             self.outcome = Outcome.CAUGHT
         elif self.elapsed_s >= self.config.round_time_limit_s:
             self.outcome = Outcome.TIMEOUT
 
         # Prune older UI transient events (older than 2.5 seconds)
-        now = time.monotonic()
-        self.recent_events = [e for e in self.recent_events if now - e["time"] < 2.5]
+        self.recent_events = [e for e in self.recent_events if self.elapsed_s - e["time"] < 2.5]
 
         return self.outcome
 
@@ -365,7 +434,7 @@ class RoundEngine:
         """Live engineered feature vector for logistic regression win prediction."""
         dist_to_hunter = self.maze.shortest_path_len(self.player.position, self.hunter.position)
         dist_to_exit = self.maze.shortest_path_len(self.player.position, self.maze.exit)
-        time_left_ratio = max(0.0, 1 - self.elapsed_s / self.config.round_time_limit_s)
+        time_left_ratio = max(0.0, 1 - self.elapsed_s / self.config.round_time_limit_s) if self.config.round_time_limit_s else 0.0
         cells_travelled = max(1, len(self.player.path_taken) - 1)
         efficiency = (
             self.maze.shortest_path_len(self.maze.start, self.player.position) / cells_travelled

@@ -118,5 +118,4 @@ def test_engine_pause_and_resume():
     assert engine.is_paused is False
 
     engine.update(simulated_dt=1.0)
-    assert engine.frame == initial_frame + 1
-
+    assert engine.frame == initial_frame + engine.config.fps

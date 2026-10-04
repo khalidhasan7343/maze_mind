@@ -42,6 +42,7 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
 from data.preprocess import build_training_frame
+from ml.artifacts import metadata, validate_bundle
 
 FEATURE_COLS = [
     "time_taken_s",
@@ -61,6 +62,8 @@ def elbow_scan(X: np.ndarray, k_range=range(2, 8)) -> dict:
     to draw the elbow curve in the dashboard."""
     inertias = {}
     for k in k_range:
+        if k > len(X):
+            continue
         km = KMeans(n_clusters=k, n_init=10, random_state=42)
         km.fit(X)
         inertias[k] = km.inertia_
@@ -96,6 +99,8 @@ def train(db_path: str | None = None, k: int = 3, model_path: str = MODEL_PATH):
     global _MODEL_CACHE
     df, scale_params = build_training_frame(db_path)
     X = df[FEATURE_COLS].values
+    if k < 2 or k > len(X) or len(X) < 2:
+        raise ValueError("K-Means needs at least two rounds and 2 <= k <= sample count")
 
     elbow = elbow_scan(X)
     print("Elbow inertias:", {k_: round(v, 2) for k_, v in elbow.items()})
@@ -112,10 +117,11 @@ def train(db_path: str | None = None, k: int = 3, model_path: str = MODEL_PATH):
     coords_2d = pca.fit_transform(X)
     print(f"PCA explained variance ratio: {pca.explained_variance_ratio_}")
 
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    os.makedirs(os.path.dirname(os.path.abspath(model_path)), exist_ok=True)
     bundle = {
         "model": km, "scale_params": scale_params, "features": FEATURE_COLS,
         "cluster_names": cluster_names, "pca": pca, "elbow": elbow,
+        "_path": model_path, **metadata(),
     }
     joblib.dump(bundle, model_path)
     _MODEL_CACHE = bundle
@@ -127,8 +133,8 @@ def predict_style(feature_row: dict, model_path: str = MODEL_PATH) -> str:
     global _MODEL_CACHE
     from data.preprocess import apply_scale
 
-    if _MODEL_CACHE is None or getattr(_MODEL_CACHE, "_path", None) != model_path:
-        bundle = joblib.load(model_path)
+    if _MODEL_CACHE is None or _MODEL_CACHE.get("_path") != model_path:
+        bundle = validate_bundle(joblib.load(model_path))
         bundle["_path"] = model_path
         _MODEL_CACHE = bundle
     else:
