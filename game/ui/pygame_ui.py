@@ -1,5 +1,5 @@
 """Provide the original classic interface and its event loop. This optional view remains
-available through --view classic and shares RoundSession with the default isometric
+available through Home or --view classic and shares RoundSession with the isometric
 interface.
 
 Interactive screen controller: menu, play, pause, history, and results.
@@ -44,6 +44,7 @@ from game.ui.theme import (
 )
 from game.ui.widgets import Button, _draw_meter
 from game.ui.rendering import (_create_window_icon, _draw_player_icon, _draw_hunter_icon, _draw_exit_portal, _draw_maze, _cell_center)
+from game.ui.navigation import NavigationAction
 
 def run_round(
     config: RoundConfig,
@@ -52,12 +53,14 @@ def run_round(
     logger: RoundLogger | None = None,
     headless_for_testing: bool = False,
     initial_tier: str = "Recruit",
-) -> Outcome:
+) -> Outcome | NavigationAction:
     """Coordinate the classic screens, input, engine, and session services so the original
     flat-board interface remains available alongside isometric play.
 
     Execute the full interactive Maze Mind UI loop with Tactical Cockpit, History, and
     Pause.
+    Back to Home returns a navigation request rather than an outcome so the
+    launcher can reopen view selection without logging an unfinished round.
     """
     if headless_for_testing:
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
@@ -198,6 +201,10 @@ def run_round(
         (SCREEN_WIDTH // 2 - 130, 595, 260, 40),
         "Quit to Desktop", font_sm, bg_color=(28, 34, 48), hover_color=(45, 52, 70),
     )
+    btn_home_menu = Button(
+        (MARGIN, 20, 180, 36), "Back to Home [Esc]", font_sm,
+        bg_color=(35, 44, 65), hover_color=(50, 65, 95),
+    )
 
     # 5. Pause Modal Buttons
     pause_modal_w, pause_modal_h = 420, 370
@@ -274,6 +281,7 @@ def run_round(
         player_summary = logger.get_player_summary(player_tag)
 
     running = True
+    requested_home = False
     frames_to_render = 3 if headless_for_testing else None
     frame_count = 0
 
@@ -305,6 +313,12 @@ def run_round(
 
             # STATE: START MENU
             if current_state == STATE_MENU:
+                btn_home_menu.update(mouse_pos)
+                if btn_home_menu.is_clicked(event) or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                    requested_home = True
+                    held_movement.clear()
+                    running = False
+                    break
                 for tname, btn in menu_tier_buttons.items():
                     btn.update(mouse_pos)
                     if btn.is_clicked(event):
@@ -323,7 +337,7 @@ def run_round(
                     player_summary = logger.get_player_summary(player_tag)
                     previous_state = STATE_MENU
                     current_state = STATE_HISTORY
-                elif btn_quit_menu.is_clicked(event) or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                elif btn_quit_menu.is_clicked(event):
                     running = False
 
             # STATE: PLAYING
@@ -464,6 +478,7 @@ def run_round(
                 big_banner_font=big_banner_font,
                 btn_history_menu=btn_history_menu,
                 btn_quit_menu=btn_quit_menu,
+                btn_home_menu=btn_home_menu,
                 btn_start_game=btn_start_game,
                 current_skill=current_skill,
                 font=font,
@@ -706,4 +721,6 @@ def run_round(
             running = False
 
     pygame.quit()
+    if requested_home:
+        return NavigationAction.HOME
     return engine.outcome

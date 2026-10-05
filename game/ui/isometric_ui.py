@@ -1,4 +1,4 @@
-"""Provide the default light-themed level menu, gameplay, pause, and results screens. The
+"""Provide the light-themed isometric level menu, gameplay, pause, and results screens. The
 controller delegates rules and persistence to existing services so the new view remains
 part of the same game.
 
@@ -14,6 +14,7 @@ from game.engine import Outcome, RoundConfig
 from game.maze_gen import generate_maze
 from game.session import RoundSession, TIERS, configure_round
 from .controls import HeldMovement, KEY_TO_DIR, move_toward_cell, radar_guide
+from .navigation import NavigationAction
 from .isometric_render import BG, BLUE, GREEN, INK, LINE, MUTED, RED, IsometricRenderer
 
 LEVEL_COPY = {
@@ -41,6 +42,7 @@ class IsometricGame:
         self.session = RoundSession(config, player_tag, logger, skill_hint)
         self.selected_tier = initial_tier
         self.state = "menu"
+        self.requested_home = False
         self.held = HeldMovement()
         self.renderer = IsometricRenderer()
         self.preview_renderer = IsometricRenderer()
@@ -217,8 +219,10 @@ class Interface:
         self.text("m", 60, 31, 20, (255, 255, 255), center=True)
         self.text("maze mind", 84, 29, 24)
         self.text("ISOMETRIC", 238, 38, 12, MUTED)
-        self.text(self.game.session.player_tag[:22], w - 245, 36, 14, MUTED)
+        tag_x = w - 580 if self.game.state == "menu" else w - 245
+        self.text(self.game.session.player_tag[:22], tag_x, 36, 14, MUTED)
         if self.game.state == "menu":
+            self.button("home", pygame.Rect(w - 326, 29, 170, 36), "Back to Home")
             self.button("quit", pygame.Rect(w - 128, 29, 80, 36), "Close")
         else:
             self.button("pause", pygame.Rect(w - 154, 29, 106, 36), "Resume" if self.game.state == "paused" else "Pause")
@@ -255,7 +259,7 @@ class Interface:
         self.text(LEVEL_COPY[g.selected_tier][1], preview.centerx, preview.bottom - 27, 14, MUTED, center=True)
         self.button("start", pygame.Rect(48, h - 94, 350, 52), "Start playing   /   Enter", primary=True)
         self.text("The hunter waits for your first move.", 426, h - 85, 16)
-        self.text("Choose a level with your mouse or arrow keys.", 426, h - 59, 14, MUTED)
+        self.text("Mouse / arrows to choose a level. Esc to return Home.", 426, h - 59, 14, MUTED)
 
     def draw_play(self):
         """Present the maze, escape progress, hunter state, and abilities so navigation
@@ -367,6 +371,10 @@ class Interface:
         g = self.game
         if action == "quit":
             return False
+        if action == "home":
+            g.requested_home = True
+            g.held.clear()
+            return False
         if action.startswith("level:"):
             g.selected_tier = action.split(":")[1]
         elif action.startswith("move:"):
@@ -403,7 +411,7 @@ class Interface:
                 elif event.key in (pygame.K_LEFT, pygame.K_UP):
                     g.select(-1)
                 elif event.key == pygame.K_ESCAPE:
-                    return False
+                    return self.action("home")
             elif g.state == "results":
                 if event.key == pygame.K_RETURN:
                     g.start()
@@ -437,11 +445,13 @@ class Interface:
 
 
 def run_round(config: RoundConfig, player_tag="player1", skill_hint=None, logger=None,
-              initial_tier="Recruit", headless_for_testing=False):
+              initial_tier="Recruit", headless_for_testing=False) -> Outcome | NavigationAction:
     """Own the window, event loop, resize handling, and cleanup so the CLI can launch the
     isometric experience with the same configuration and logger as classic play.
 
     Launch the optional view; the level menu always appears before gameplay.
+    Back to Home returns a navigation request so the launcher can reopen view
+    selection without counting the screen transition as a finished round.
     """
     pygame.init()
     try:
@@ -471,6 +481,8 @@ def run_round(config: RoundConfig, player_tag="player1", skill_hint=None, logger
             frames += 1
             if headless_for_testing and frames >= 3:
                 break
+        if game.requested_home:
+            return NavigationAction.HOME
         return game.engine.outcome if game.engine else Outcome.PLAYING
     finally:
         pygame.quit()

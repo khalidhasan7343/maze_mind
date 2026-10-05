@@ -33,25 +33,39 @@ def cmd_play(args):
     playing and recording a round use the same services.
     """
     from game.engine import RoundConfig
-    if args.view == "isometric":
-        from game.ui.isometric_ui import run_round
-    else:
-        from game.ui.pygame_ui import run_round
-    from data.logger import RoundLogger
-    from ml.knn_skill import skill_from_history
-
-    logger = RoundLogger()
-    skill_hint = skill_from_history(logger.fetch_by_player(args.tag))
-
+    from game.ui.navigation import NavigationAction
     config = RoundConfig(
         width=args.width,
         height=args.height,
         round_time_limit_s=args.time_limit,
         seed=args.seed,
     )
-    outcome = run_round(config, player_tag=args.tag, skill_hint=skill_hint, logger=logger,
-                        initial_tier=args.difficulty)
-    print(f"Round finished: {outcome.value}")
+    view = args.view
+    logger = None
+    while True:
+        if view is None:
+            from game.ui.home import choose_view
+            view = choose_view(player_tag=args.tag, seed=args.seed)
+            if view is None:
+                print("Game closed.")
+                return
+        if view == "isometric":
+            from game.ui.isometric_ui import run_round
+        else:
+            from game.ui.pygame_ui import run_round
+        from data.logger import RoundLogger
+        from ml.knn_skill import skill_from_history
+
+        if logger is None:
+            logger = RoundLogger()
+        skill_hint = skill_from_history(logger.fetch_by_player(args.tag))
+        outcome = run_round(config, player_tag=args.tag, skill_hint=skill_hint, logger=logger,
+                            initial_tier=args.difficulty)
+        if outcome is NavigationAction.HOME:
+            view = None
+            continue
+        print(f"Round finished: {outcome.value}")
+        return
 
 
 def cmd_simulate(args):
@@ -149,8 +163,8 @@ def main():
 
     p_play = sub.add_parser("play", help="Play one round")
     p_play.add_argument("--tag", default="player1")
-    p_play.add_argument("--view", choices=["classic", "isometric"], default="isometric",
-                        help="Choose the isometric interface (default) or the classic board")
+    p_play.add_argument("--view", choices=["classic", "isometric"], default=None,
+                        help="Skip the home screen and launch the selected view directly")
     p_play.add_argument("--width", type=int, default=14)
     p_play.add_argument("--height", type=int, default=14)
     p_play.add_argument("--time-limit", type=float, default=60.0)

@@ -32,10 +32,11 @@ python main.py train
 # 3. Generate the report figures
 python main.py dashboard
 
-# 4. Open the isometric level menu; Recruit is selected first
+# 4. Choose Classic or Isometric on Home, then choose your level
 python main.py play --tag yourname
 
-# Open the original flat board when you want the classic view
+# Skip Home and open either view directly
+python main.py play --view isometric --tag yourname
 python main.py play --view classic --tag yourname
 
 # Switch to adaptive difficulty when you want a tougher chase
@@ -63,6 +64,7 @@ game/
   engine.py         Round state machine (PLAYING/ESCAPED/CAUGHT/TIMEOUT)
   session.py        Difficulty, completed-round logging, optional ML predictors
   ui/pygame_ui.py   Screen controller and event loop
+  ui/home.py        Home screen for choosing Classic or Isometric before level selection
   ui/isometric_ui.py  Light theme, level selection, isometric game screens
   ui/isometric_render.py  Raised maze geometry and smooth character movement
   ui/screens.py     Menu, history, pause, and results views
@@ -155,10 +157,27 @@ here rather than adding text comments inside those binary artifacts.
 
 ## Playing and difficulty
 
+### Home screen
+
+`python main.py play --tag yourname` opens **Home**, where you choose **Classic**
+or **Isometric** from two preview cards. Click either card or its button to open
+that view's level-selection screen. You can also use **Left / Right** to select
+a view and **Enter** to continue. **Esc**, **Close**, or closing the window exits.
+After choosing a view, click **Back to Home** or press **Esc** on its level menu
+to return here and choose the other view. During play, first return to the level
+menu through the pause screen. Your CLI settings and player records are retained
+when switching views; an unfinished round does not become a completed result.
+The home screen does not start a round, run the hunter, or save a game result.
+Your player tag, difficulty, custom dimensions, timer, and seed carry into the
+selected view.
+
+Use `--view classic` or `--view isometric` to skip Home and open that view directly.
+
 ### Isometric view
 
-Run `python main.py play --tag yourname` to open the default isometric
-light-themed interface. Select Recruit, Runner, Master, Adaptive, or Custom,
+Choose **Isometric** on Home, or run
+`python main.py play --view isometric --tag yourname` to open its light-themed
+interface directly. Select Recruit, Runner, Master, Adaptive, or Custom,
 then click **Start playing** or press **Enter**. No round timer runs in the menu.
 The timer and hunter start on your first successful move (including a dash);
 blocked moves do not start the chase. The hunter follows you with A* from then

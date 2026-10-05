@@ -226,17 +226,21 @@ def test_result_screens_save_once_and_allow_level_selection(interface, game, out
 
 @pytest.mark.parametrize("view_args", [[], ["--view", "isometric"]])
 def test_cli_can_launch_isometric_view(tmp_path, monkeypatch, view_args):
-    """Check default and explicit isometric routing so ordinary play launches the new
-    interface with the selected difficulty and player tag.
+    """Check home-selected and explicit isometric routing so both launch paths forward
+    the selected difficulty and player tag.
     """
     logger = RoundLogger(str(tmp_path / "cli.db"))
     monkeypatch.setattr("data.logger.RoundLogger", lambda: logger)
     play = Mock(return_value=Outcome.PLAYING)
     monkeypatch.setattr(ui, "run_round", play)
+    from game.ui import home
+    chooser = Mock(return_value="isometric")
+    monkeypatch.setattr(home, "choose_view", chooser)
     monkeypatch.setattr(sys, "argv", ["main.py", "play", *view_args, "--difficulty", "Runner", "--tag", "alice"])
     main.main()
     assert play.call_args.kwargs["initial_tier"] == "Runner"
     assert play.call_args.kwargs["player_tag"] == "alice"
+    assert chooser.call_count == (0 if view_args else 1)
 
 
 def test_isometric_event_loop_starts_with_menu_then_moves(tmp_path, monkeypatch):

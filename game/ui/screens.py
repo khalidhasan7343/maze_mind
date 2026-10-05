@@ -39,10 +39,15 @@ def draw_menu(
     player_tag,
     screen,
     selected_tier,
+    btn_home_menu=None,
 ):
     """Explain controls and difficulty choices before classic play so a player can select
     an appropriate challenge.
+    The optional Home control lets a launcher return to view selection while
+    keeping this screen usable by callers that only render the level menu.
     """
+    if btn_home_menu is not None:
+        btn_home_menu.draw(screen)
     title_surf = big_banner_font.render("MAZE MIND", True, COLOR_TEXT_PRIMARY)
     screen.blit(title_surf, title_surf.get_rect(center=(SCREEN_WIDTH // 2, 65)))
 
