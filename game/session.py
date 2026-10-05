@@ -172,7 +172,10 @@ class RoundSession:
             hunter_move_ms=round(1000*c.hunter_move_interval/c.fps),
         )
         self.round_id = self.logger.log_round(record, self.snapshots)
-        features = extract_round_features(asdict(record))
+        feature_record = asdict(record)
+        # asdict omits calculated properties; match the mean stored by the logger.
+        feature_record["avg_decision_time_s"] = record.avg_decision_time_s
+        features = extract_round_features(feature_record)
         predicted = self.skill_predictor(features)
         self.style = self.style_predictor(features)
         version = f"features-{FEATURE_VERSION}; skill={self.skill_predictor.version}; style={self.style_predictor.version}"

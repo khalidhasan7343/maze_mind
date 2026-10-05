@@ -1,0 +1,161 @@
+MAZE MIND — IMPORTANTS NOTES
+Prepared from the current project on 5 October 2026.
+Detailed reference: Judge guide.md
+
+1. OPENING
+
+My project is Maze Mind, a desktop maze escape game. The player tries to
+reach the exit before an AI hunter catches them or time expires. I combine
+graph search, database logging, machine learning, and two user interfaces.
+
+2. ARCHITECTURE
+
+The frontend is built with Pygame. Home lets the player choose Classic or
+Isometric, followed by a level menu. Both views use the same backend.
+
+RoundEngine handles movement, walls, the timer, abilities, the hunter,
+and outcomes. RoundSession handles difficulty, history, snapshots,
+completed-round saving, and optional predictions.
+
+This is one Python desktop process. The frontend calls backend methods;
+there is no HTTP API or separately running server. RoundLogger connects
+to the local SQLite database using Python's sqlite3 module.
+
+3. ALGORITHMS AND GAMEPLAY
+
+Randomized DFS generates a connected maze. BFS measures shortest corridor
+distances. A* plans the hunter's route using actual path cost plus a
+Manhattan-distance heuristic. The hunter replans as the target changes.
+
+In Isometric, the first legal player move starts the timer and pursuit.
+After that, the hunter moves on its own timing interval, even if the player
+stops. Recruit provides a guide, slower hunter, and additional abilities.
+
+The Isometric appearance is 2.5D: a 2D maze projected into tilted polygons
+with raised walls and actors. It is not a full 3D physics engine.
+
+4. DATABASE
+
+The rounds table stores completed games: maze information, steps, timing,
+backtracks, result, independent labels, and model predictions.
+
+The round_snapshots table stores sampled intermediate features linked to
+the parent round. One round can have many snapshots. They are collected
+in memory and saved with the completed game, not written every frame.
+
+Ground-truth skill labels and predicted skills are separate columns.
+Player tags group local history; they are not authenticated accounts.
+
+5. MACHINE LEARNING
+
+KNN classifies completed-round skill as Beginner, Intermediate, or Expert.
+It uses scaled features such as time, efficiency, backtracks, and decision
+timing. Recent estimates inform hunter timing in later Adaptive rounds.
+
+K-Means groups gameplay into descriptive styles. The default is three
+clusters. Names such as cautious explorer are heuristic interpretations.
+PCA reduces the features to two axes for a report chart.
+
+Logistic regression estimates eventual escape probability from the current
+hunter distance, exit distance, time ratio, and movement efficiency.
+The live probability display is currently in Classic.
+
+A* controls route planning; it is separate from the trained models.
+Gameplay gathers data and runs inference. Explicit offline training updates
+the model files. This is not reinforcement learning.
+
+6. RESULTS — USE THESE EXACT QUALIFICATIONS
+
+Saved artifacts are dated 4 October 2026:
+
+- KNN held-out accuracy: 100% on 72 synthetic test rounds.
+- KNN mean cross-validation accuracy: 100% in the saved evaluation.
+- Logistic regression accuracy: 86.54%; ROC AUC: 0.858.
+- Logistic evaluation: 144 training / 36 testing rounds, with 104 synthetic
+  testing snapshots. Snapshots from one round never cross the split.
+- Neither saved supervised holdout evaluation includes human samples.
+- K-Means has three clusters and inertia 18.7695. Inertia is not accuracy.
+- Two PCA components retain about 97.07% of the fitted dataset variance.
+
+These scores show performance on the generated bot domain. I must not claim
+100% real-player skill accuracy or calibrated human escape probabilities.
+
+7. TESTS
+
+The tests folder checks game rules, maze/search correctness, persistence,
+feature/model behavior, CLI, both UIs, Home navigation, and playability.
+Fixtures use temporary databases/models and headless graphics drivers.
+
+The current local run passed 123 tests, with one joblib core-detection
+warning. Passing software tests is different from measuring ML accuracy.
+GitHub Actions is configured to check Python 3.12 and 3.14.
+
+8. LIVE DEMO CHECKLIST
+
+Run from the project root with the existing environment:
+
+    source .venv/bin/activate
+    python main.py play --tag faculty_demo
+
+Show Home, open a view's level menu, and use Back to Home.
+Choose Isometric -> Recruit -> Start. Explain first-move activation.
+Move using the guide; demonstrate smoke, radar, and pause/resume.
+Complete a round, then show persistence:
+
+    python main.py records --tag faculty_demo
+
+Show Classic's live probability meter if models are available:
+
+    python main.py play --view classic --tag faculty_demo
+
+Show the report figures and run:
+
+    python -m pytest -q
+
+Optional report regeneration:
+
+    python main.py dashboard
+
+If preparing a fresh checkout with no models/data, do this BEFORE the demo:
+
+    python main.py simulate --rounds-per-profile 120
+    python main.py train
+    python main.py dashboard
+
+Simulation appends 360 requested bot rounds. Training replaces the default
+model files; resulting scores can change. Do not repeat preparation merely
+to open the game. Core gameplay also works without trained models.
+
+9. LIMITATIONS AND NEXT WORK
+
+I need independent human labels and evaluation across views/difficulties.
+I should assess probability calibration and improve accessibility.
+
+The post-round decision-time handoff has been corrected: RoundSession now
+explicitly passes the calculated average to skill/style inference. Regression
+tests compare prediction inputs with stored and batch features for both views,
+including one-move and empty histories. This improves input consistency;
+it does not establish real-player ML accuracy.
+
+10. COMMON QUESTIONS
+
+Where is the backend?
+    RoundEngine and RoundSession; connected directly to the Pygame UI.
+Which model catches the player?
+    None directly. A* plans routes; ML can inform Adaptive hunter timing.
+Does it learn on each move?
+    No. It collects data; the train command refits the models.
+Is Isometric true 3D?
+    It is 2.5D projection over a two-dimensional maze.
+Why not call K-Means 100% accurate?
+    It is unsupervised; inertia and PCA variance are different measures.
+Why do I need tests?
+    To detect regressions and verify behavior consistently.
+Does 100% KNN mean every human is classified correctly?
+    No. The saved holdout contains only synthetic bot rounds.
+
+11. CLOSING
+
+Maze Mind demonstrates an integrated system where a playable frontend,
+classical AI search, persistent data, and ML analysis share a common core.
+My next priorities are human validation and probability calibration.

@@ -3,6 +3,11 @@
 This file explains setup, gameplay, architecture, and data/model behavior so a
 new contributor can understand the project before changing its code.
 
+For a complete faculty presentation, read [Judge guide.md](<Judge guide.md>).
+It explains frontend/backend/database connections, algorithms, ML results,
+tests, demo steps, and viva answers. [importants notes.txt](<importants notes.txt>)
+provides a shorter speaking script and demonstration checklist.
+
 AI Maze Runner with a Learning Layer — race the hunter, log every move,
 let the data teach you.
 

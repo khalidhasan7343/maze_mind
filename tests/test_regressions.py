@@ -306,3 +306,59 @@ def test_session_logs_once_and_keeps_ground_truth_separate(tmp_path):
     assert row["predicted_skill"] == "Expert"
     assert row["predicted_style"] == "rusher"
     assert logger.fetch_snapshots()[0]["won"] == 1
+
+
+@pytest.mark.parametrize("start_on_move", [False, True], ids=["classic", "isometric"])
+@pytest.mark.parametrize("delays", [[1.2, 1.8], [0.4], []], ids=["multiple-decisions", "one-decision", "no-decisions"])
+def test_session_predictions_match_saved_features(tmp_path, monkeypatch, start_on_move, delays):
+    """Compare actual predictor inputs with persisted and batch features so both views
+    retain calculated decision timing, including single-move and empty histories.
+    """
+    now = [100.0]
+    monkeypatch.setattr("game.engine.time.monotonic", lambda: now[0])
+    logger = RoundLogger(str(tmp_path / "rounds.db"))
+    session = RoundSession(RoundConfig(width=8, height=8, seed=11), "alice", logger)
+    engine = session.start("Custom", start_on_move=start_on_move)
+    for delay in delays:
+        now[0] += delay
+        x, y = engine.player_pos
+        direction = next(d for d, blocked in engine.maze.walls[y][x].items() if not blocked)
+        assert engine.move_player(direction)
+    observed = {}
+
+    def predict_skill(features):
+        """Capture the real skill input so the test checks the session boundary rather
+        than constructing an already-correct feature dictionary.
+        """
+        observed["skill"] = features.copy()
+        return "Intermediate"
+
+    def predict_style(features):
+        """Capture style input separately so both completed-round models must receive
+        the same correctly calculated telemetry.
+        """
+        observed["style"] = features.copy()
+        return "balanced runner"
+
+    predict_skill.version = "test-skill"
+    predict_style.version = "test-style"
+    session.skill_predictor = predict_skill
+    session.style_predictor = predict_style
+    engine.outcome = Outcome.TIMEOUT
+    assert session.finish()
+    row = logger.fetch_all()[0]
+    # Isometric begins timing at its first legal move, excluding pre-start waiting.
+    expected_delays = [0.0, *delays[1:]] if start_on_move and delays else delays
+    assert engine.decision_times_s == pytest.approx(expected_delays)
+    expected_mean = sum(expected_delays) / len(expected_delays) if expected_delays else 0.0
+    assert row["avg_decision_time_s"] == pytest.approx(expected_mean)
+    saved_features = extract_round_features(row)
+    for features in observed.values():
+        assert features["avg_decision_time_s"] == pytest.approx(expected_mean)
+        assert features == pytest.approx(saved_features)
+        if delays:
+            training_row = build_feature_frame(str(tmp_path / "rounds.db")).iloc[0]
+            assert features == pytest.approx({key: training_row[key] for key in features})
+    assert set(observed) == {"skill", "style"}
+    assert row["predicted_skill"] == "Intermediate"
+    assert row["predicted_style"] == "balanced runner"
