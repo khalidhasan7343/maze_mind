@@ -1,3 +1,8 @@
+"""Configure shared pytest fixtures and headless graphics drivers before UI imports.
+Temporary databases and real temporary models let tests exercise the project without
+modifying player artifacts.
+"""
+
 import os
 
 import pytest
@@ -8,7 +13,11 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
 @pytest.fixture(scope="session")
 def trained_models(tmp_path_factory):
-    """Actual training artifacts in isolation, independent of user model files."""
+    """Train real artifacts in temporary storage so model tests exercise genuine inference
+    without depending on or overwriting the player database and model files.
+
+    Actual training artifacts in isolation, independent of user model files.
+    """
     from data.simulate import generate_dataset
     from ml.knn_skill import train as train_knn
     from ml.kmeans_strategy import train as train_kmeans

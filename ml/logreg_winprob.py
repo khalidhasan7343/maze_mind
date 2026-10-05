@@ -1,4 +1,7 @@
-"""
+"""Train and apply an escape-probability model using mid-round snapshots. Grouped round
+splits evaluate the estimate without placing related snapshots on both sides of the
+evaluation boundary.
+
 Logistic Regression — Live Probabilistic Win Estimation.
 
 ===============================================================================
@@ -26,7 +29,8 @@ THEORETICAL FOUNDATION & LECTURE CONCEPTS:
 
 4. LIVE INFERENCE IN THE HUD:
    Trained on mid-round game state snapshots, the model evaluates live feature
-   vectors at 30 FPS without disk I/O, updating the HUD win-probability meter.
+   vectors in the classic HUD. The first prediction loads its model artifact;
+   subsequent predictions reuse the cache instead of repeating disk access.
 ===============================================================================
 """
 
@@ -56,7 +60,10 @@ _MODEL_CACHE: dict | None = None
 
 def collect_snapshots(n_rounds_per_profile: int = 60, snapshots_per_round: int = 6,
                        seed: int = 1) -> pd.DataFrame:
-    """Run bot rounds, but instead of only logging the final outcome,
+    """Sample running bot rounds and attach their eventual outcomes so the model learns to
+    estimate escape probability from an unfinished game state.
+
+    Run bot rounds, but instead of only logging the final outcome,
     sample mid-round feature snapshots and label every snapshot with the
     round's *eventual* outcome — that's the supervised signal for
     'given how things look right now, did this player go on to escape?'
@@ -95,7 +102,11 @@ def collect_snapshots(n_rounds_per_profile: int = 60, snapshots_per_round: int =
 
 
 def split_snapshot_rounds(df: pd.DataFrame):
-    """Stratify whole rounds, never placing snapshots of one round in both sets."""
+    """Keep every snapshot from a round in one evaluation partition so related game states
+    cannot leak from training into testing.
+
+    Stratify whole rounds, never placing snapshots of one round in both sets.
+    """
     rounds = df.groupby("round_id")["won"].first()
     counts = rounds.value_counts()
     if len(counts) != 2 or counts.min() < 2:
@@ -106,6 +117,9 @@ def split_snapshot_rounds(df: pd.DataFrame):
 
 
 def train(model_path: str = MODEL_PATH, snapshot_frame: pd.DataFrame | None = None, **collect_kwargs):
+    """Evaluate escape prediction on separate rounds, then save a refitted model so the HUD
+    can use all eligible examples after evaluation is complete.
+    """
     global _MODEL_CACHE
     df = collect_snapshots(**collect_kwargs) if snapshot_frame is None else snapshot_frame.copy()
     if snapshot_frame is None:
@@ -150,9 +164,13 @@ def train(model_path: str = MODEL_PATH, snapshot_frame: pd.DataFrame | None = No
 
 
 def predict_win_probability(features: dict, model_path: str = MODEL_PATH) -> float:
-    """Called once per frame during play — must be cheap. features come
+    """Run cached inference on current engine features so the classic HUD can refresh its
+    escape estimate without repeatedly loading the model from disk.
+
+    Called once per frame during play — must be cheap. features come
     straight from RoundEngine.win_probability_features(), unscaled (the
-    model was trained on raw values, so no scale_params needed here)."""
+    model was trained on raw values, so no scale_params needed here).
+    """
     global _MODEL_CACHE
     if _MODEL_CACHE is None or _MODEL_CACHE.get("_path") != model_path:
         bundle = validate_bundle(joblib.load(model_path))

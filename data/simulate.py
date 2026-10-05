@@ -1,4 +1,7 @@
-r"""
+r"""Generate headless gameplay using bot profiles and the real round engine. Synthetic
+labelled examples let the learning pipeline start before enough human rounds have been
+collected.
+
 Monte Carlo Synthetic Gameplay Simulation & Cold-Start Data Ingestion.
 
 ===============================================================================
@@ -11,14 +14,12 @@ THEORETICAL FOUNDATION & LECTURE CONCEPTS:
    synthetic behavioral archetypes by executing automated bot agents against
    the true underlying `RoundEngine` and physics loop.
 
-2. EPSILON-GREEDY AGENT POLICIES (MARKOV DECISION PROCESS):
-   Each bot profile formalizes an epsilon-greedy policy over candidate actions A(s):
-     - With probability (1 - epsilon) = greediness:
-       Select action a* = argmin_{a} d_{A*}(T(s, a), exit)
-       (Optimal exploitation along the true A* shortest path).
-     - With probability epsilon = mistake_rate:
-       Select random legal exploratory action a in A(s) \ {a*}
-       (Simulates hesitation, perceptual blind spots, and dead-end detours).
+2. STOCHASTIC MOVEMENT POLICY:
+   A bot first checks mistake_rate. A mistake selects any random legal direction.
+   Otherwise, greediness determines whether to follow the first A* step toward
+   the exit or choose a random legal direction. Random choices can include the
+   optimal direction; these two probabilities are independent profile settings.
+   This creates varied navigation behavior without changing the underlying rules.
 
 3. STOCHASTIC DECISION LATENCY MODELING:
    Cognitive decision latencies delta_t are sampled from bounded uniform intervals
@@ -50,12 +51,19 @@ DIRS = ["N", "S", "E", "W"]
 
 
 class BotProfile:
-    """A bot picks a direction each tick. `greediness` in [0,1] is the
+    """Group synthetic navigation probabilities and thinking delays so named bot skill
+    groups produce repeatable differences in behavior.
+
+    A bot picks a direction each tick. `greediness` in [0,1] is the
     chance it moves along the true shortest path to the exit rather than
-    a random legal direction — this is what separates skill classes."""
+    a random legal direction — this is what separates skill classes.
+    """
 
     def __init__(self, name: str, greediness: float, think_time_range: tuple,
                  mistake_rate: float):
+        """Define navigation preferences and decision delays together so different
+        synthetic skill groups produce different movement behavior.
+        """
         self.name = name
         self.greediness = greediness
         self.think_time_range = think_time_range
@@ -76,7 +84,11 @@ SKILL_FOR_PROFILE = {
 
 
 def _greedy_direction(engine: RoundEngine) -> str | None:
-    """One step along the current BFS-shortest path to the exit."""
+    """Turn the first A* route step into a movement direction so bots can deliberately head
+    toward the exit.
+
+    One step along the current A* shortest path to the exit.
+    """
     maze = engine.maze
     from game.astar import astar_path
     path = astar_path(maze, engine.player_pos, maze.exit)
@@ -92,11 +104,17 @@ def _greedy_direction(engine: RoundEngine) -> str | None:
 
 
 def _legal_directions(engine: RoundEngine) -> list:
+    """Filter out walls before bot action selection so random exploration still obeys the
+    movement rules.
+    """
     x, y = engine.player_pos
     return [d for d in DIRS if not engine.maze.walls[y][x][d]]
 
 
 def run_bot_round(profile: BotProfile, config: RoundConfig, rng: random.Random) -> RoundRecord:
+    """Convert a finished headless round into the shared record format so synthetic
+    examples can use the same persistence pipeline as human play.
+    """
     for engine in iter_bot_round(profile, config, rng):
         pass
 
@@ -123,7 +141,11 @@ def run_bot_round(profile: BotProfile, config: RoundConfig, rng: random.Random) 
 
 
 def iter_bot_round(profile: BotProfile, config: RoundConfig, rng: random.Random):
-    """Yield shared-clock states; the hunter keeps moving while the bot thinks."""
+    """Yield successive engine states while simulating thinking time so dataset generation
+    and snapshot collection can observe the same timed gameplay.
+
+    Yield shared-clock states; the hunter keeps moving while the bot thinks.
+    """
     engine = RoundEngine(config)
     engine.update(simulated_dt=0.0)
     next_decision = rng.uniform(*profile.think_time_range)
@@ -146,6 +168,9 @@ def iter_bot_round(profile: BotProfile, config: RoundConfig, rng: random.Random)
 
 
 def generate_dataset(n_per_profile: int = 120, db_path: str | None = None, seed: int = 0) -> int:
+    """Generate seeded rounds across bot profiles and maze settings so initial model
+    training has varied, labelled examples.
+    """
     if n_per_profile < 1:
         raise ValueError("rounds-per-profile must be positive")
     logger = RoundLogger(db_path=db_path) if db_path else RoundLogger()

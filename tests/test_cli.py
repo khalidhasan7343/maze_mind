@@ -1,3 +1,7 @@
+"""Verify command argument forwarding and manual-label behavior. These checks protect the
+public CLI that launches the game and updates reviewed training labels.
+"""
+
 import sys
 from unittest.mock import Mock
 
@@ -9,12 +13,15 @@ from game.engine import Outcome
 
 
 def test_play_cli_preserves_custom_parameters(tmp_path, monkeypatch):
+    """Protect CLI argument forwarding so the classic launcher receives the requested
+    custom grid, timer, seed, and player tag.
+    """
     from game.ui import pygame_ui
     logger = RoundLogger(str(tmp_path / "cli.db"))
     monkeypatch.setattr("data.logger.RoundLogger", lambda: logger)
     play = Mock(return_value=Outcome.PLAYING)
     monkeypatch.setattr(pygame_ui, "run_round", play)
-    monkeypatch.setattr(sys, "argv", ["main.py", "play", "--tag", "alice", "--difficulty", "Custom",
+    monkeypatch.setattr(sys, "argv", ["main.py", "play", "--view", "classic", "--tag", "alice", "--difficulty", "Custom",
                                       "--width", "9", "--height", "7", "--time-limit", "17", "--seed", "42"])
     main.main()
     config = play.call_args.args[0]
@@ -24,6 +31,9 @@ def test_play_cli_preserves_custom_parameters(tmp_path, monkeypatch):
 
 
 def test_label_cli_sets_verified_ground_truth(tmp_path, monkeypatch):
+    """Protect verified-label updates and missing-round errors so manual review remains a
+    reliable source of supervised training labels.
+    """
     logger = RoundLogger(str(tmp_path / "cli.db"))
     rid = logger.log_round(RoundRecord(session_id="s", player_tag="alice", is_bot=False,
                           maze_width=8, maze_height=8, optimal_path_len=10, dead_end_count=2,

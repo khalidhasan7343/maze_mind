@@ -1,3 +1,8 @@
+"""Verify responsive controls, smoke escapes, useful guidance, fair spawning, adaptive
+assistance, and approachable Recruit rounds. These checks guard player experience
+alongside rule correctness.
+"""
+
 from dataclasses import asdict
 
 import pygame
@@ -11,6 +16,9 @@ from game.ui.controls import HeldMovement
 
 
 def test_held_keys_repeat_and_release_without_os_repeat():
+    """Protect key-repeat and release behavior so movement remains responsive without
+    depending on operating-system repeat settings.
+    """
     movement = HeldMovement()
     assert movement.press(pygame.K_RIGHT, 1.0) == "E"
     assert movement.update(1.1) is None
@@ -27,6 +35,9 @@ def test_held_keys_repeat_and_release_without_os_repeat():
 
 @pytest.mark.parametrize("ability", ["walk", "dash"])
 def test_smoke_allows_safe_passage_past_hunter(ability):
+    """Check walking and dashing through a stunned hunter so smoke provides the intended
+    escape opportunity.
+    """
     engine = RoundEngine(RoundConfig(width=8, height=8, seed=42))
     engine.update(simulated_dt=0)
     destination = next(engine.maze.neighbors(*engine.player_pos))
@@ -43,6 +54,9 @@ def test_smoke_allows_safe_passage_past_hunter(ability):
 
 
 def test_active_hunter_still_catches_player():
+    """Protect active collision detection so smoke-related changes do not make a pursuing
+    hunter harmless.
+    """
     engine = RoundEngine(RoundConfig(width=8, height=8, seed=42))
     engine.update(simulated_dt=0)
     destination = next(engine.maze.neighbors(*engine.player_pos))
@@ -54,6 +68,9 @@ def test_active_hunter_still_catches_player():
 
 
 def test_hunter_uses_corridor_distance_for_detection():
+    """Check detection through actual passages so a nearby hunter behind walls does not
+    detect the classic player too early.
+    """
     engine = RoundEngine(RoundConfig(width=8, height=8, seed=42))
     nearby_but_blocked = next((x,y) for y in range(8) for x in range(8)
                              if x+y <= 8 and engine.maze.shortest_path_len((0,0),(x,y)) > 8)
@@ -63,6 +80,9 @@ def test_hunter_uses_corridor_distance_for_detection():
 
 
 def test_route_guidance_updates_with_progress():
+    """Protect guide refresh and progress measurement so hints stay useful after the player
+    advances.
+    """
     engine = RoundEngine(configure_round(RoundConfig(seed=42), "Recruit"))
     engine.update(simulated_dt=0)
     guide = engine.route_guide_path()
@@ -76,12 +96,18 @@ def test_route_guidance_updates_with_progress():
 
 
 def test_spawn_does_not_block_escape_route_when_side_corridors_exist():
+    """Check fair starting placement so the hunter does not unnecessarily occupy the only
+    route to the exit.
+    """
     engine = RoundEngine(configure_round(RoundConfig(seed=42), "Recruit"))
     route = astar_path(engine.maze, engine.maze.start, engine.maze.exit)
     assert engine.hunter.position not in route
 
 
 def test_adaptive_helps_after_two_losses(tmp_path):
+    """Protect loss-triggered assistance so repeated failures grant practical help while
+    Custom still preserves the base configuration.
+    """
     logger = RoundLogger(str(tmp_path / "rounds.db"))
     for _ in range(2):
         logger.log_round(RoundRecord(session_id="s", player_tag="alice", is_bot=False,
@@ -99,7 +125,11 @@ def test_adaptive_helps_after_two_losses(tmp_path):
 
 
 def test_recruit_is_winnable_at_a_deliberate_pace():
-    """No teleporting or instant movement: walk the displayed guide with real hunter ticks."""
+    """Play thirty seeded classic rounds with genuine hunter ticks so Recruit remains
+    approachable for a player following the displayed guide.
+
+    No teleporting or instant movement: walk the displayed guide with real hunter ticks.
+    """
     escapes = 0
     for seed in range(30):
         engine = RoundEngine(configure_round(RoundConfig(seed=seed), "Recruit"))

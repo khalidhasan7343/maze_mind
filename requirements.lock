@@ -1,4 +1,7 @@
-# Exact versions validated locally on Python 3.14.
+# Purpose: pin direct and indirect dependencies to the environment tested on Python 3.14.
+# Development setup and CI install this file to reproduce the same dependency versions.
+# Change requirements.txt for supported dependency ranges; refresh this file after
+# deliberately upgrading and validating the complete environment.
 Pygments==2.21.0
 cloudpickle==3.1.2
 contourpy==1.4.0

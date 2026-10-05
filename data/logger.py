@@ -1,4 +1,7 @@
-"""
+"""Persist round records, snapshots, and independently reviewed labels in SQLite.
+Centralizing schema upgrades and queries gives sessions, training, and records screens
+one storage contract.
+
 Round-by-Round SQLite Telemetry Ingestion & Persistence Engine.
 
 ===============================================================================
@@ -39,6 +42,9 @@ _DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "..", "db", "maze_min
 
 @dataclass
 class RoundRecord:
+    """Define completed-round fields independently of SQLite so human sessions and bots can
+    submit the same telemetry contract.
+    """
     session_id: str
     player_tag: str
     is_bot: bool
@@ -63,18 +69,30 @@ class RoundRecord:
 
     @property
     def avg_decision_time_s(self) -> float:
+        """Summarize decision delays safely when the list is empty so the logger always has
+        a numeric latency feature.
+        """
         if not self.decision_times_s:
             return 0.0
         return sum(self.decision_times_s) / len(self.decision_times_s)
 
 
 class RoundLogger:
+    """Centralize schema initialization, transactions, and queries so every project
+    component accesses records consistently.
+    """
     def __init__(self, db_path: str = _DEFAULT_DB_PATH):
+        """Prepare the database location and schema so game sessions and simulations can
+        start logging without a separate setup command.
+        """
         self.db_path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._init_schema()
 
     def _init_schema(self) -> None:
+        """Create missing tables and add legacy columns so existing player history survives
+        schema upgrades.
+        """
         with open(_SCHEMA_PATH, "r") as f:
             schema = f.read()
         with self._connect() as conn:
@@ -93,6 +111,9 @@ class RoundLogger:
 
     @contextmanager
     def _connect(self):
+        """Manage transactions, foreign keys, and connection cleanup centrally so every
+        database operation commits or rolls back consistently.
+        """
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA foreign_keys = ON")
         try:
@@ -102,6 +123,9 @@ class RoundLogger:
             conn.close()
 
     def log_round(self, record: RoundRecord, snapshots: list[dict] | None = None) -> int:
+        """Insert a result and its optional snapshots in one transaction so training data
+        cannot retain snapshots without the associated completed round.
+        """
         with self._connect() as conn:
             cur = conn.execute(
                 """
@@ -147,7 +171,11 @@ class RoundLogger:
             return cur.lastrowid
 
     def update_skill_label(self, round_id: int, skill_label: str) -> None:
-        """Set a verified ground-truth label; predictions use update_predictions."""
+        """Record an explicit verified label so supervised training can distinguish
+        independent review from automatic model predictions.
+
+        Set a verified ground-truth label; predictions use update_predictions.
+        """
         if skill_label not in {"Beginner", "Intermediate", "Expert"}:
             raise ValueError("Unknown skill label")
         with self._connect() as conn:
@@ -159,6 +187,9 @@ class RoundLogger:
                 raise ValueError(f"Round {round_id} does not exist")
 
     def update_predictions(self, round_id: int, skill: str | None, style: str | None, model_version: str) -> None:
+        """Store model outputs and provenance separately so inference never overwrites a
+        ground-truth skill label.
+        """
         with self._connect() as conn:
             conn.execute(
                 "UPDATE rounds SET predicted_skill = ?, predicted_style = ?, model_version = ? WHERE round_id = ?",
@@ -166,6 +197,9 @@ class RoundLogger:
             )
 
     def log_snapshots(self, round_id: int, snapshots: list[dict]) -> None:
+        """Attach additional feature snapshots to an existing round so collected game
+        states can be used for outcome prediction.
+        """
         with self._connect() as conn:
             conn.executemany(
                 "INSERT INTO round_snapshots (round_id, dist_to_hunter, dist_to_exit, time_left_ratio, efficiency) VALUES (?, ?, ?, ?, ?)",
@@ -173,6 +207,9 @@ class RoundLogger:
             )
 
     def fetch_snapshots(self) -> list[dict]:
+        """Join current-version snapshots to eventual outcomes and prefix round IDs so
+        training can combine saved and simulated rounds without identifier collisions.
+        """
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("""
@@ -186,12 +223,18 @@ class RoundLogger:
             return result
 
     def fetch_all(self) -> list:
+        """Return chronological round dictionaries so preprocessing can inspect the
+        complete stored dataset.
+        """
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM rounds ORDER BY round_id ASC").fetchall()
             return [dict(r) for r in rows]
 
     def fetch_by_player(self, player_tag: str) -> list:
+        """Return chronological history for one tag so difficulty adaptation and personal
+        records do not mix different players.
+        """
         with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
@@ -201,11 +244,18 @@ class RoundLogger:
             return [dict(r) for r in rows]
 
     def count(self) -> int:
+        """Expose the number of saved results so CLI checks and tests can confirm how much
+        telemetry was recorded.
+        """
         with self._connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM rounds").fetchone()[0]
 
     def get_player_summary(self, player_tag: str | None = None) -> dict:
-        """Aggregate career statistics and recent match logs for a player."""
+        """Aggregate personal records or global human statistics so CLI and UI consumers
+        receive the same career metrics and empty-history behavior.
+
+        Aggregate career statistics and recent match logs for a player.
+        """
         rounds = []
         if player_tag is not None:
             rounds = self.fetch_by_player(player_tag)

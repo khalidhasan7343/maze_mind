@@ -1,19 +1,30 @@
+"""Verify core round movement, outcomes, abilities, and pause behavior. Engine tests
+protect shared game rules independently of either graphical interface.
+"""
+
 from game.engine import RoundEngine, RoundConfig, Outcome
 
 
 def make_engine(**overrides):
+    """Construct a small seeded engine with optional overrides so rule tests start from
+    reproducible game conditions.
+    """
     cfg_kwargs = dict(width=8, height=8, round_time_limit_s=30, seed=11)
     cfg_kwargs.update(overrides)
     return RoundEngine(RoundConfig(**cfg_kwargs))
 
 
 def test_round_starts_in_playing_state():
+    """Protect initial outcome and position so a newly created round begins at its intended
+    start cell.
+    """
     engine = make_engine()
     assert engine.outcome == Outcome.PLAYING
     assert engine.player_pos == engine.maze.start
 
 
 def test_illegal_move_into_wall_is_rejected():
+    """Protect wall collision rules so blocked input cannot change the player position."""
     engine = make_engine()
     x, y = engine.player_pos
     # find a direction that is walled off
@@ -26,6 +37,9 @@ def test_illegal_move_into_wall_is_rejected():
 
 
 def test_reaching_exit_sets_escaped():
+    """Check the complete legal escape route so reaching the exit produces the expected
+    terminal outcome.
+    """
     engine = make_engine()
     # Walk the true shortest path to the exit and confirm ESCAPED triggers.
     from game.astar import astar_path
@@ -42,12 +56,18 @@ def test_reaching_exit_sets_escaped():
 
 
 def test_timeout_triggers_after_time_limit():
+    """Protect timeout handling at a zero-duration boundary so an exhausted timer cannot
+    leave a classic round playing.
+    """
     engine = make_engine(round_time_limit_s=0.0)
     engine.update()
     assert engine.outcome == Outcome.TIMEOUT
 
 
 def test_backtrack_is_counted():
+    """Protect immediate-reversal telemetry so learning features can measure repeated
+    movement back to the preceding cell.
+    """
     engine = make_engine()
     x, y = engine.player_pos
     open_dirs = [d for d, is_wall in engine.maze.walls[y][x].items() if not is_wall]
@@ -61,6 +81,9 @@ def test_backtrack_is_counted():
 
 
 def test_win_probability_features_shape():
+    """Check the live feature contract and timer ratio so the outcome predictor receives
+    the required fields.
+    """
     engine = make_engine()
     feats = engine.win_probability_features()
     for key in ("dist_to_hunter", "dist_to_exit", "time_left_ratio", "efficiency"):
@@ -69,6 +92,9 @@ def test_win_probability_features_shape():
 
 
 def test_player_tactical_abilities():
+    """Protect charge consumption, cooldowns, and radar results so ability behavior remains
+    consistent after engine changes.
+    """
     from game.astar import HunterState
     engine = make_engine()
 
@@ -101,6 +127,9 @@ def test_player_tactical_abilities():
 
 
 def test_engine_pause_and_resume():
+    """Verify that pause freezes ticks and resume restores them so menus cannot advance the
+    hunter or cooldowns.
+    """
     engine = make_engine()
     assert not engine.is_paused
 

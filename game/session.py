@@ -1,4 +1,9 @@
-"""Round lifecycle, difficulty selection, telemetry, and optional ML predictions."""
+"""Coordinate difficulty, player history, model availability, snapshots, and completed-
+round persistence. Both UIs use this service so changing presentation does not require a
+second logging or adaptation implementation.
+
+Round lifecycle, difficulty selection, telemetry, and optional ML predictions.
+"""
 
 import logging
 import os
@@ -26,6 +31,9 @@ TIERS = [*DIFFICULTY_PRESETS, "Adaptive", "Custom"]
 
 
 def configure_round(base: RoundConfig, tier: str, skill: str = "Beginner") -> RoundConfig:
+    """Apply the chosen preset to a copy so switching difficulty does not overwrite the
+    custom settings supplied by the player.
+    """
     if tier not in TIERS:
         raise ValueError(f"Unknown difficulty: {tier}")
     overrides = DIFFICULTY_PRESETS.get(tier, {})
@@ -35,15 +43,25 @@ def configure_round(base: RoundConfig, tier: str, skill: str = "Beginner") -> Ro
 
 
 def tier_description(base: RoundConfig, tier: str, skill: str) -> str:
+    """Describe the effective preset settings so the classic level menu explains what the
+    player is choosing.
+    """
     c = configure_round(base, tier, skill)
     guide = " • Route guide ON" if c.route_guide else ""
     return f"{c.width}x{c.height} Grid • {c.round_time_limit_s:g}s Timer • {c.smoke_charges} Smokes & {c.radar_charges} Radars{guide}"
 
 
 class OptionalPredictor:
-    """Disable unavailable/incompatible models once, with an explicit HUD status."""
+    """Wrap optional learning artifacts so absent or incompatible models affect estimates
+    rather than stopping the game.
+
+    Disable unavailable/incompatible models once, with an explicit HUD status.
+    """
 
     def __init__(self, predict, model_path):
+        """Track whether a model artifact exists before inference so missing optional
+        models do not prevent a game from starting.
+        """
         self.predict = predict
         self.model_path = model_path
         self.available = os.path.isfile(model_path)
@@ -51,6 +69,9 @@ class OptionalPredictor:
         self.version = None
 
     def __call__(self, features):
+        """Wrap prediction failures and artifact metadata so incompatible optional models
+        are disabled once while gameplay continues.
+        """
         if not self.available:
             return None
         try:
@@ -67,7 +88,13 @@ class OptionalPredictor:
 
 
 class RoundSession:
+    """Share difficulty adaptation, snapshots, and finalization between interfaces so each
+    view records results and handles models consistently.
+    """
     def __init__(self, config: RoundConfig, player_tag: str, logger: RoundLogger, skill_hint=None):
+        """Collect player history, prediction services, and logging state so both UI
+        versions share one round lifecycle.
+        """
         from ml.knn_skill import predict_skill, MODEL_PATH as KNN_PATH
         from ml.kmeans_strategy import predict_style, MODEL_PATH as STYLE_PATH
         from ml.logreg_winprob import predict_win_probability, MODEL_PATH as WIN_PATH
@@ -85,7 +112,10 @@ class RoundSession:
         self.next_snapshot = 0.0
         self.summary = logger.get_player_summary(player_tag)
 
-    def start(self, tier: str) -> RoundEngine:
+    def start(self, tier: str, *, start_on_move: bool = False) -> RoundEngine:
+        """Create a fresh difficulty-adjusted engine and reset snapshot state so repeated
+        rounds receive current assistance and independent telemetry.
+        """
         history = self.logger.fetch_by_player(self.player_tag)
         self.skill = skill_from_history(history, default=self.skill)
         config = configure_round(self.base_config, tier, self.skill)
@@ -95,6 +125,13 @@ class RoundSession:
             config = replace(config, hunter_move_interval=max(config.hunter_move_interval, 60),
                              awakening_duration_s=max(config.awakening_duration_s, 8.0),
                              smoke_charges=max(config.smoke_charges, 3), route_guide=True)
+        if start_on_move:
+            config = replace(config, hunter_waits_for_player=True,
+                             hunter_always_pursues=True, awakening_duration_s=0.0)
+            # Immediate pursuit removes the classic head start. Keep guided
+            # rounds approachable by giving the hunter a three-second cadence.
+            if tier == "Recruit" or assistance:
+                config = replace(config, hunter_move_interval=max(config.hunter_move_interval, 3 * config.fps))
         self.engine = RoundEngine(config)
         if assistance:
             path_len = self.engine.maze.shortest_path_len(self.engine.maze.start, self.engine.maze.exit)
@@ -107,12 +144,19 @@ class RoundSession:
         return self.engine
 
     def capture_snapshot(self):
+        """Sample active game features at intervals so completed rounds can train the
+        escape-probability model without recording every display frame.
+        """
         if self.engine.outcome == Outcome.PLAYING and self.engine.elapsed_s >= self.next_snapshot:
             self.snapshots.append(self.engine.win_probability_features())
             self.next_snapshot = self.engine.elapsed_s + max(1.0 / self.engine.config.fps, self.engine.config.round_time_limit_s / 6)
 
     def finish(self) -> bool:
-        """Log a terminal round once, then update predictions independently of labels."""
+        """Save a completed round only once and store predictions separately so replaying
+        results cannot duplicate records or contaminate training labels.
+
+        Log a terminal round once, then update predictions independently of labels.
+        """
         e = self.engine
         if e.outcome == Outcome.PLAYING or self.round_id is not None:
             return False

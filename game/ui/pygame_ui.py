@@ -1,4 +1,9 @@
-"""Interactive screen controller: menu, play, pause, history, and results."""
+"""Provide the original classic interface and its event loop. This optional view remains
+available through --view classic and shares RoundSession with the default isometric
+interface.
+
+Interactive screen controller: menu, play, pause, history, and results.
+"""
 
 from __future__ import annotations
 
@@ -48,7 +53,12 @@ def run_round(
     headless_for_testing: bool = False,
     initial_tier: str = "Recruit",
 ) -> Outcome:
-    """Execute the full interactive Maze Mind UI loop with Tactical Cockpit, History, and Pause."""
+    """Coordinate the classic screens, input, engine, and session services so the original
+    flat-board interface remains available alongside isometric play.
+
+    Execute the full interactive Maze Mind UI loop with Tactical Cockpit, History, and
+    Pause.
+    """
     if headless_for_testing:
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
@@ -82,6 +92,9 @@ def run_round(
 
     # Apply Selected Tier Preset
     def configure_round_engine(tier_name: str) -> RoundEngine:
+        """Start the selected preset through RoundSession and refresh local settings so the
+        classic HUD reflects the actual active difficulty.
+        """
         nonlocal config, current_skill
         engine = session.start(tier_name)
         config = engine.config
@@ -92,6 +105,9 @@ def run_round(
 
     # Calculate Responsive Cell Sizing
     def calculate_cell_layout():
+        """Size and center grid cells for the current maze so changing difficulty does not
+        leave the board using the previous dimensions.
+        """
         c_size = max(2, min(52, 620 // engine.maze.width, 620 // engine.maze.height))
         m_w = engine.maze.width * c_size
         m_h = engine.maze.height * c_size
@@ -244,6 +260,9 @@ def run_round(
     held_movement = HeldMovement()
 
     def start_new_round():
+        """Settle completed telemetry and reset controls, guide state, and layout so a
+        restart begins with a fresh round and correct HUD.
+        """
         nonlocal engine, round_recorded, cell_size, offset_x, offset_y, radar_guide_path, radar_guide_timer, player_summary
         session.finish()
         held_movement.clear()

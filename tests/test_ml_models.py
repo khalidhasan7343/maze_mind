@@ -1,3 +1,8 @@
+"""Verify model feature inputs, saved-scale behavior, supporting telemetry, and real
+artifact inference. These checks ensure the learning models can consume the data
+produced by the game.
+"""
+
 import os
 import tempfile
 import pytest
@@ -12,6 +17,9 @@ from game.maze_gen import generate_maze
 
 @pytest.fixture
 def temp_db():
+    """Create and remove an isolated database path so model-related persistence tests
+    cannot affect the player records.
+    """
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     os.remove(path)
@@ -21,6 +29,9 @@ def temp_db():
 
 
 def test_extract_round_features():
+    """Check single-record feature values so live completed-round predictions use the
+    expected telemetry definitions.
+    """
     raw_row = {
         "time_taken_s": 15.5,
         "player_path_len": 20,
@@ -45,6 +56,9 @@ def test_extract_round_features():
 
 
 def test_apply_scale_preserves_unscaled_features():
+    """Protect untouched feature fields so applying saved numeric ranges does not discard
+    outcome codes or other inputs.
+    """
     scale_params = {
         "time_taken_s": {"min": 0.0, "max": 60.0},
         "efficiency_ratio": {"min": 0.0, "max": 1.0},
@@ -63,6 +77,9 @@ def test_apply_scale_preserves_unscaled_features():
 
 
 def test_engine_simulated_dt():
+    """Check deterministic time advancement and timeout so headless training rounds obey
+    the same clock rules as live play.
+    """
     cfg = RoundConfig(width=6, height=6, round_time_limit_s=2.0, fps=10)
     engine = RoundEngine(cfg)
     assert engine.elapsed_s == 0.0
@@ -79,6 +96,9 @@ def test_engine_simulated_dt():
 
 
 def test_hunter_replans_when_path_depleted():
+    """Protect recovery from an exhausted route so the hunter can keep moving before the
+    next scheduled replan.
+    """
     maze = generate_maze(6, 6, seed=123)
     hunter = Hunter(position=(0, 0), replan_interval=100, move_interval=1)
     hunter.detection_radius = 100
@@ -96,6 +116,9 @@ def test_hunter_replans_when_path_depleted():
 
 
 def test_logger_update_skill_label_and_fetch_by_player(temp_db):
+    """Check tag filtering and manual labels so stored examples stay associated with the
+    correct player and reviewed skill.
+    """
     logger = RoundLogger(db_path=temp_db)
     rec1 = RoundRecord(
         session_id="s1", player_tag="bob", is_bot=False,
@@ -127,6 +150,9 @@ def test_logger_update_skill_label_and_fetch_by_player(temp_db):
 
 
 def test_predict_skill_and_style_live(trained_models):
+    """Run inference with actual trained artifacts so the skill, playstyle, and win
+    estimators are tested beyond mocked outputs.
+    """
     from ml.knn_skill import predict_skill
     from ml.kmeans_strategy import predict_style
     from ml.logreg_winprob import predict_win_probability

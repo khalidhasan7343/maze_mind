@@ -1,7 +1,17 @@
+# Purpose: list direct dependencies used by development and package installation.
+# requirements.lock captures the exact tested environment, including indirect packages.
+
+# Window creation, keyboard/mouse input, and classic/isometric drawing.
 pygame-ce
+# Numeric features and matrix calculations shared by models and reports.
 numpy>=1.24
+# Tabular telemetry processing and training datasets.
 pandas>=2.0
+# KNN, K-Means, PCA, logistic regression, scaling, and model evaluation.
 scikit-learn>=1.3
+# Export dashboard charts without requiring an interactive plotting window.
 matplotlib>=3.7
+# Persist trained model bundles and reload them for inference.
 joblib>=1.3
+# Run rule, data, model, and UI regression checks during development and CI.
 pytest>=7.4

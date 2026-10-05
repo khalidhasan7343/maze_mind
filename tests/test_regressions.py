@@ -1,3 +1,8 @@
+"""Preserve fixes for migration, timing, label separation, evaluation leakage, prediction
+caching, and one-time logging. Each test prevents a previously addressed failure from
+returning.
+"""
+
 from dataclasses import replace
 import sqlite3
 
@@ -14,12 +19,18 @@ from game.session import configure_round, RoundSession, OptionalPredictor
 
 
 def record(**changes):
+    """Build a valid record with targeted overrides so regression tests can isolate one
+    persistence or feature behavior at a time.
+    """
     return RoundRecord(**dict(dict(session_id="s", player_tag="alice", is_bot=False,
                                   maze_width=8, maze_height=8, optimal_path_len=10, dead_end_count=2,
                                   player_path_len=12, time_taken_s=8.0, backtracks=1, outcome="escaped"), **changes))
 
 
 def test_unknown_player_has_empty_history(tmp_path):
+    """Protect player-specific empty history so an unknown tag cannot receive somebody
+    else's statistics.
+    """
     logger = RoundLogger(str(tmp_path / "rounds.db"))
     logger.log_round(record())
     assert logger.get_player_summary("nobody")["total_rounds"] == 0
@@ -28,6 +39,9 @@ def test_unknown_player_has_empty_history(tmp_path):
 
 
 def test_predictions_do_not_change_verified_labels(tmp_path):
+    """Protect label provenance so automatic inference cannot overwrite independently
+    verified training targets.
+    """
     logger = RoundLogger(str(tmp_path / "rounds.db"))
     rid = logger.log_round(record(skill_label="Beginner", label_source="verified"))
     logger.update_predictions(rid, "Expert", "rusher", "v2")
@@ -38,6 +52,9 @@ def test_predictions_do_not_change_verified_labels(tmp_path):
 
 
 def test_existing_database_migration_preserves_history(tmp_path):
+    """Open a legacy schema and migrate it so updates retain old rounds and distinguish old
+    from current telemetry.
+    """
     from pathlib import Path
     schema = Path("db/schema.sql").read_text().split("CREATE TABLE IF NOT EXISTS round_snapshots")[0]
     new_columns = ("label_source", "predicted_skill", "predicted_style", "model_version", "remaining_path_len", "telemetry_version")
@@ -60,6 +77,9 @@ def test_existing_database_migration_preserves_history(tmp_path):
 
 
 def test_paused_actions_and_decision_times(monkeypatch):
+    """Protect action blocking and clock compensation so pause duration cannot distort
+    movement decisions or total round time.
+    """
     now = [100.0]
     monkeypatch.setattr("game.engine.time.monotonic", lambda: now[0])
     engine = RoundEngine(RoundConfig(width=8, height=8, seed=11))
@@ -80,6 +100,9 @@ def test_paused_actions_and_decision_times(monkeypatch):
 
 
 def test_cadence_independent_of_update_size():
+    """Compare coarse and fine update intervals so simulation results remain independent of
+    render or caller update frequency.
+    """
     config = RoundConfig(width=8, height=8, seed=11, awakening_duration_s=0)
     slow = RoundEngine(config)
     fast = RoundEngine(config)
@@ -93,6 +116,9 @@ def test_cadence_independent_of_update_size():
 
 
 def test_bot_thinking_time_advances_game_clock():
+    """Protect realistic bot timing so the hunter keeps moving during decision delays and
+    synthetic telemetry measures the actual game clock.
+    """
     import random
     result = run_bot_round(PROFILES[0], RoundConfig(width=8, height=8, seed=42), random.Random(0))
     assert sum(result.decision_times_s) <= result.time_taken_s + 0.001
@@ -102,6 +128,9 @@ def test_bot_thinking_time_advances_game_clock():
 
 @pytest.mark.parametrize("tier", ["Custom", "Adaptive"])
 def test_presets_preserve_base_config(tier):
+    """Check configuration copying so selecting another tier does not permanently overwrite
+    Custom or Adaptive grid and timer settings.
+    """
     base = RoundConfig(width=9, height=7, round_time_limit_s=17)
     configure_round(base, "Master")
     configured = configure_round(base, tier, "Expert")
@@ -111,6 +140,9 @@ def test_presets_preserve_base_config(tier):
 
 
 def test_skill_history_resists_one_unusual_round():
+    """Protect median-based adaptation so a single exceptional prediction cannot abruptly
+    change player difficulty.
+    """
     from ml.knn_skill import skill_from_history
     rows = [{"predicted_skill": "Beginner"} for _ in range(4)] + [{"predicted_skill": "Expert"}]
     assert skill_from_history(rows) == "Beginner"
@@ -118,6 +150,9 @@ def test_skill_history_resists_one_unusual_round():
 
 
 def test_failed_round_efficiency_measures_progress():
+    """Protect progress-based features so short failed runs do not receive an artificially
+    high efficiency score.
+    """
     row = dict(time_taken_s=1.0, player_path_len=2, optimal_path_len=20,
                remaining_path_len=19, backtracks=0, decision_times_s="[]", outcome="caught",
                maze_width=8, maze_height=8)
@@ -128,6 +163,9 @@ def test_failed_round_efficiency_measures_progress():
 
 
 def test_snapshot_split_keeps_rounds_together(trained_models):
+    """Check grouped evaluation so snapshots of the same round cannot appear in both
+    training and test partitions.
+    """
     from ml.logreg_winprob import split_snapshot_rounds
     training, testing = split_snapshot_rounds(trained_models["snapshots"])
     assert set(training["round_id"]).isdisjoint(testing["round_id"])
@@ -140,6 +178,9 @@ def test_snapshot_split_keeps_rounds_together(trained_models):
     ("logreg", "ml.logreg_winprob", "predict_win_probability"),
 ])
 def test_prediction_cache_loads_once_and_switches_path(trained_models, monkeypatch, tmp_path, name, module_name, predict_name):
+    """Protect prediction caching and path changes so repeated inference avoids disk I/O
+    while an explicitly different model still loads.
+    """
     import importlib
     module = importlib.import_module(module_name)
     bundle = joblib.load(trained_models[name])
@@ -149,6 +190,9 @@ def test_prediction_cache_loads_once_and_switches_path(trained_models, monkeypat
     original = joblib.load
     calls = []
     def load(path):
+        """Record real artifact loads so the cache test can count disk access without
+        replacing the loaded model.
+        """
         calls.append(path)
         return original(path)
     monkeypatch.setattr(module, "_MODEL_CACHE", None)
@@ -162,6 +206,9 @@ def test_prediction_cache_loads_once_and_switches_path(trained_models, monkeypat
 
 
 def test_knn_scaler_is_fit_after_holdout_split(trained_models, monkeypatch, tmp_path):
+    """Inspect scaler training inputs so evaluation data cannot influence the feature
+    ranges learned for a holdout prediction.
+    """
     from sklearn.preprocessing import MinMaxScaler
     from sklearn.model_selection import train_test_split
     from ml import knn_skill
@@ -172,6 +219,9 @@ def test_knn_scaler_is_fit_after_holdout_split(trained_models, monkeypatch, tmp_
     original = MinMaxScaler.fit
     fits = []
     def fit(self, X, y=None):
+        """Capture scaler fit inputs while calling the original implementation so the test
+        can verify split isolation with genuine training behavior.
+        """
         fits.append(np.asarray(X).copy())
         return original(self, X, y)
     monkeypatch.setattr(MinMaxScaler, "fit", fit)
@@ -181,6 +231,9 @@ def test_knn_scaler_is_fit_after_holdout_split(trained_models, monkeypatch, tmp_
 
 
 def test_predicted_labels_excluded_from_training(trained_models, monkeypatch, tmp_path):
+    """Protect supervised eligibility so prediction-only rows cannot become their own
+    training labels.
+    """
     from ml import knn_skill
     frame = build_feature_frame(trained_models["db"])
     frame["label_source"] = "unknown"
@@ -191,6 +244,9 @@ def test_predicted_labels_excluded_from_training(trained_models, monkeypatch, tm
 
 
 def test_dashboard_uses_saved_model_scale(trained_models, monkeypatch, tmp_path):
+    """Perturb new telemetry ranges so the dashboard must use saved normalization rather
+    than redefining the trained cluster coordinates.
+    """
     from dashboard import report_plots
     bundle = joblib.load(trained_models["kmeans"])
     frame = build_feature_frame(trained_models["db"])
@@ -199,6 +255,9 @@ def test_dashboard_uses_saved_model_scale(trained_models, monkeypatch, tmp_path)
     seen = []
     original = bundle["model"].predict
     def predict(X):
+        """Capture the actual clustering input so the plot test can verify that saved
+        training ranges were applied.
+        """
         seen.append(X.copy())
         return original(X)
     monkeypatch.setattr(bundle["model"], "predict", predict)
@@ -211,6 +270,9 @@ def test_dashboard_uses_saved_model_scale(trained_models, monkeypatch, tmp_path)
 
 
 def test_missing_or_old_model_has_explicit_status(tmp_path):
+    """Protect optional-model failure handling so missing or incompatible artifacts disable
+    estimates with an understandable retraining status.
+    """
     from ml import logreg_winprob
     missing = OptionalPredictor(logreg_winprob.predict_win_probability, str(tmp_path / "missing.joblib"))
     assert missing({}) is None
@@ -224,6 +286,9 @@ def test_missing_or_old_model_has_explicit_status(tmp_path):
 
 
 def test_session_logs_once_and_keeps_ground_truth_separate(tmp_path):
+    """Protect shared round finalization so logging is idempotent, snapshots get eventual
+    outcomes, and predicted skill stays separate from ground truth.
+    """
     logger = RoundLogger(str(tmp_path / "rounds.db"))
     session = RoundSession(RoundConfig(width=8, height=8, seed=11), "alice", logger)
     engine = session.start("Custom")

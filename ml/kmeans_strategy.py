@@ -1,4 +1,7 @@
-"""
+"""Train and apply playstyle clustering with saved scaling, names, and PCA. Keeping these
+outputs in one artifact makes live style names and report coordinates refer to the same
+learned groups.
+
 K-Means Playstyle Clustering & PCA Dimensionality Reduction.
 
 ===============================================================================
@@ -58,8 +61,12 @@ _MODEL_CACHE: dict | None = None
 
 
 def elbow_scan(X: np.ndarray, k_range=range(2, 8)) -> dict:
-    """Inertia per K — used to justify the K choice in the report, and
-    to draw the elbow curve in the dashboard."""
+    """Measure clustering inertia across candidate group counts so the dashboard can show
+    evidence for the selected number of playstyles.
+
+    Inertia per K — used to justify the K choice in the report, and
+    to draw the elbow curve in the dashboard.
+    """
     inertias = {}
     for k in k_range:
         if k > len(X):
@@ -71,9 +78,13 @@ def elbow_scan(X: np.ndarray, k_range=range(2, 8)) -> dict:
 
 
 def _label_clusters(df, labels) -> dict:
-    """Heuristic naming: rank clusters by mean efficiency_ratio and
+    """Assign interpretable names from cluster behavior so players and reports see
+    descriptive playstyles instead of arbitrary numeric IDs.
+
+    Heuristic naming: rank clusters by mean efficiency_ratio and
     avg_decision_time_s so the names mean something in the report,
-    rather than just 'cluster 0/1/2'."""
+    rather than just 'cluster 0/1/2'.
+    """
     import pandas as pd
     tmp = df.copy()
     tmp["cluster"] = labels
@@ -96,6 +107,9 @@ def _label_clusters(df, labels) -> dict:
 
 
 def train(db_path: str | None = None, k: int = 3, model_path: str = MODEL_PATH):
+    """Fit and save clustering, normalization, PCA, and elbow results together so inference
+    and visual reports use one consistent training coordinate system.
+    """
     global _MODEL_CACHE
     df, scale_params = build_training_frame(db_path)
     X = df[FEATURE_COLS].values
@@ -130,6 +144,9 @@ def train(db_path: str | None = None, k: int = 3, model_path: str = MODEL_PATH):
 
 
 def predict_style(feature_row: dict, model_path: str = MODEL_PATH) -> str:
+    """Apply the saved scale and cached clustering model so a completed round can receive
+    the playstyle name learned during training.
+    """
     global _MODEL_CACHE
     from data.preprocess import apply_scale
 

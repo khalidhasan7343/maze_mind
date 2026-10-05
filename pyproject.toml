@@ -1,7 +1,14 @@
+# Purpose: define how Maze Mind is built, installed, and launched as a Python package.
+# Keep packaging settings here so an installed game includes the same modules and schema
+# as a source checkout; dependencies are read from requirements.txt below.
+
+# Setuptools builds wheels and source distributions for installation with pip.
 [build-system]
 requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
+# Package metadata identifies the distribution and its supported Python versions.
+# "dynamic" delegates dependency maintenance to the existing requirements file.
 [project]
 name = "maze-mind"
 version = "0.2.0"
@@ -10,17 +17,22 @@ readme = "README.md"
 requires-python = ">=3.12"
 dynamic = ["dependencies"]
 
+# Installing the package creates the maze-mind command, which calls main.main().
 [project.scripts]
 maze-mind = "main:main"
 
+# main.py is a top-level module, so include it alongside the discovered packages.
 [tool.setuptools]
 py-modules = ["main"]
 
+# Ship application packages; tests are exercised in the checkout rather than installed.
 [tool.setuptools.packages.find]
 include = ["game*", "data*", "ml*", "dashboard*", "db*"]
 
+# The logger reads this SQL resource to initialize databases after installation.
 [tool.setuptools.package-data]
 db = ["schema.sql"]
 
+# Reuse the direct dependency list so pip installation and development setup agree.
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}

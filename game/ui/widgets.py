@@ -1,4 +1,9 @@
-"""Reusable buttons and telemetry meters."""
+"""Provide reusable classic buttons and status meters. The screens share these widgets so
+hover behavior, disabled controls, and metric displays follow consistent presentation
+rules.
+
+Reusable buttons and telemetry meters.
+"""
 
 import pygame
 from game.ui.theme import (
@@ -12,7 +17,11 @@ from game.ui.theme import (
 )
 
 class Button:
-    """Clickable UI button supporting hover states, disabled styling, and badges."""
+    """Reuse geometry, appearance, hover state, and click detection across classic screens
+    so button behavior remains consistent.
+
+    Clickable UI button supporting hover states, disabled styling, and badges.
+    """
 
     def __init__(
         self,
@@ -26,6 +35,9 @@ class Button:
         border_radius: int = 8,
         badge_text: str | None = None,
     ):
+        """Store button geometry, colors, and labels so classic screens can reuse the same
+        clickable control instead of reimplementing it.
+        """
         self.rect = pygame.Rect(rect)
         self.text = text
         self.font = font
@@ -39,9 +51,15 @@ class Button:
         self.disabled = False
 
     def update(self, mouse_pos: tuple[int, int]) -> None:
+        """Refresh hover state from the mouse position so enabled buttons give visual
+        feedback before a click.
+        """
         self.is_hovered = self.rect.collidepoint(mouse_pos) and not self.disabled
 
     def draw(self, screen: pygame.Surface) -> None:
+        """Render normal, hovered, or disabled styling and optional badges so button
+        appearance communicates its current availability.
+        """
         if self.disabled:
             color = (24, 28, 38)
             border_c = (38, 45, 60)
@@ -65,6 +83,9 @@ class Button:
             screen.blit(b_surf, (self.rect.right - b_surf.get_width() - 8, self.rect.top + 5))
 
     def is_clicked(self, event: pygame.event.Event) -> bool:
+        """Accept left clicks only inside an enabled button so mouse handlers cannot
+        activate disabled or unrelated controls.
+        """
         if self.disabled:
             return False
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -84,7 +105,11 @@ def _draw_meter(
     status_text: str = "",
     low_is_bad: bool = False,
 ) -> None:
-    """Render a progress meter with gradient fill and labels."""
+    """Draw a bounded status ratio with optional warning colors so time and progress values
+    are readable at a glance.
+
+    Render a progress meter with gradient fill and labels.
+    """
     ratio = max(0.0, min(1.0, ratio))
     pygame.draw.rect(screen, COLOR_METER_BG, (x, y, w, h), border_radius=4)
 

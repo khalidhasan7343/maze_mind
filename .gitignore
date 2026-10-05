@@ -1,10 +1,19 @@
+# Purpose: keep local environments, runtime artifacts, and build outputs out of source control.
+
+# Python regenerates bytecode and pytest regenerates its cache locally.
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# Player databases, trained artifacts, and report images are generated from gameplay/data.
 db/*.db
 ml/models/*.joblib
 dashboard/figures/*.png
+
+# Each machine creates its own virtual environment from the dependency files.
 .venv/
-.pytest_cache/
+
+# Packaging tools regenerate metadata, build directories, and distribution archives.
 *.egg-info/
 build/
 dist/

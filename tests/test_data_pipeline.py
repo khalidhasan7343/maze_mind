@@ -1,3 +1,7 @@
+"""Verify persistence, career summaries, feature filtering, and numeric scale reuse. These
+checks protect the transition from saved gameplay to model-ready data.
+"""
+
 import os
 import tempfile
 
@@ -10,6 +14,9 @@ import pandas as pd
 
 @pytest.fixture
 def temp_db():
+    """Provide a fresh temporary database path and clean it up so persistence tests cannot
+    alter real player history.
+    """
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     os.remove(path)  # RoundLogger creates it fresh
@@ -19,6 +26,9 @@ def temp_db():
 
 
 def test_logger_roundtrip(temp_db):
+    """Check saved fields and career summaries so writing a round preserves the data that
+    records screens display.
+    """
     logger = RoundLogger(db_path=temp_db)
     logger.log_round(RoundRecord(
         session_id="s1", player_tag="alice", is_bot=False,
@@ -43,6 +53,9 @@ def test_logger_roundtrip(temp_db):
 
 
 def test_engineer_features_drops_zero_length_rounds():
+    """Protect filtering of rounds without movement so those examples cannot distort
+    efficiency features.
+    """
     df = pd.DataFrame([
         {"player_path_len": 0, "optimal_path_len": 10, "maze_width": 8, "maze_height": 8,
          "time_taken_s": 5.0, "decision_times_s": "[]", "outcome": "timeout"},
@@ -56,6 +69,9 @@ def test_engineer_features_drops_zero_length_rounds():
 
 
 def test_min_max_normalize_and_apply_scale_roundtrip():
+    """Check that a saved training scale produces the same value for a new point so offline
+    and live preprocessing agree.
+    """
     df = pd.DataFrame({"x": [0, 5, 10]})
     normed, scale = min_max_normalize(df, ["x"])
     assert normed["x"].min() == 0.0
@@ -65,12 +81,18 @@ def test_min_max_normalize_and_apply_scale_roundtrip():
 
 
 def test_min_max_normalize_constant_column_no_division_by_zero():
+    """Protect constant-feature handling so normalization never introduces undefined values
+    for a fixed column.
+    """
     df = pd.DataFrame({"x": [3, 3, 3]})
     normed, scale = min_max_normalize(df, ["x"])
     assert not normed["x"].isna().any()
 
 
 def test_cmd_records_cli(capsys, monkeypatch, temp_db):
+    """Check empty career output so a new player can inspect records before completing a
+    round.
+    """
     import argparse
     from main import cmd_records
     logger = RoundLogger(temp_db)

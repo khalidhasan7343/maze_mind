@@ -1,5 +1,8 @@
 # Maze Mind
 
+This file explains setup, gameplay, architecture, and data/model behavior so a
+new contributor can understand the project before changing its code.
+
 AI Maze Runner with a Learning Layer — race the hunter, log every move,
 let the data teach you.
 
@@ -29,8 +32,11 @@ python main.py train
 # 3. Generate the report figures
 python main.py dashboard
 
-# 4. Start with Recruit: guided 8x8 maze, slow hunter, two-minute timer
+# 4. Open the isometric level menu; Recruit is selected first
 python main.py play --tag yourname
+
+# Open the original flat board when you want the classic view
+python main.py play --view classic --tag yourname
 
 # Switch to adaptive difficulty when you want a tougher chase
 python main.py play --tag yourname --difficulty Adaptive
@@ -57,6 +63,8 @@ game/
   engine.py         Round state machine (PLAYING/ESCAPED/CAUGHT/TIMEOUT)
   session.py        Difficulty, completed-round logging, optional ML predictors
   ui/pygame_ui.py   Screen controller and event loop
+  ui/isometric_ui.py  Light theme, level selection, isometric game screens
+  ui/isometric_render.py  Raised maze geometry and smooth character movement
   ui/screens.py     Menu, history, pause, and results views
   ui/rendering.py   Maze, characters, and portal drawing
   ui/widgets.py     Buttons and telemetry meters
@@ -81,6 +89,38 @@ main.py                CLI entry point (play / simulate / train / dashboard / re
 requirements.lock      Exact versions used for validation and CI
 .github/workflows/     Headless tests on Python 3.12 and 3.14
 ```
+
+## Understanding the comments
+
+Every Python file starts with a module docstring explaining its responsibility
+and why it is separate from the other components. Every defined function has a
+docstring explaining its job and why the project needs it, including constructors,
+properties, nested callbacks, fixtures, and test functions. Classes explain the
+state or responsibility they group together. Existing algorithm notes and useful
+input/output descriptions are retained alongside these explanations.
+
+Read a file's opening docstring first, then the docstring below the function you
+want to change. Test docstrings explain the behavior each check protects.
+Package `__init__.py` files explain their package boundaries; they do not start
+the game or train models when imported.
+
+Configuration files explain their purpose using their native comment syntax:
+
+| File | Why it exists |
+| --- | --- |
+| `pyproject.toml` | Defines package metadata, Python compatibility, the installed CLI, and bundled schema. |
+| `requirements.txt` | Lists direct dependencies and the part of the project each supports. |
+| `requirements.lock` | Pins the complete environment used for local validation and CI. |
+| `pytest.ini` | Restricts automatic test discovery to the maintained test suite. |
+| `.github/workflows/tests.yml` | Checks supported Python versions and exercises graphics through headless drivers. |
+| `.gitignore` | Excludes regenerated environments, bytecode, databases, models, charts, and build outputs. |
+| `db/schema.sql` | Defines completed-round telemetry, snapshots, relationships, and query indexes. |
+| `.python-version` | Requests Python 3.14 from compatible version managers; it stays a single version value so those tools can parse it. |
+| `README.md` | Explains installation, play, architecture, documentation, and model/data limitations. |
+
+Generated databases hold player history, model bundles hold fitted predictors,
+and dashboard PNGs hold report charts or UI previews. Their purposes are described
+here rather than adding text comments inside those binary artifacts.
 
 ## Lecture-to-feature map
 
@@ -114,6 +154,32 @@ requirements.lock      Exact versions used for validation and CI
   into `dashboard/figures/`.
 
 ## Playing and difficulty
+
+### Isometric view
+
+Run `python main.py play --tag yourname` to open the default isometric
+light-themed interface. Select Recruit, Runner, Master, Adaptive, or Custom,
+then click **Start playing** or press **Enter**. No round timer runs in the menu.
+The timer and hunter start on your first successful move (including a dash);
+blocked moves do not start the chase. The hunter follows you with A* from then
+on. Isometric Recruit gives the hunter three seconds per step to keep the
+immediate chase approachable; adaptive assistance also allows this slower pace.
+Other levels keep their configured movement speed. Smoke still freezes it.
+
+The isometric renderer projects raised walls, floor tiles, and characters in
+Pygame; no new graphics dependencies are required. The classic version remains
+available with `--view classic`. Both views share the
+same maze generation, abilities, difficulty selection, ML models, and records.
+
+Use **WASD / arrows**, the on-screen direction buttons, or an adjacent tile click
+to move. Grid north (**W / Up**) points toward the upper right of the screen;
+east (**D / Right**) points toward the lower right. **Shift** dashes, **F** uses
+smoke, and **R** reveals a short route. **P / Esc** pauses; switching away from
+the window also pauses. From the pause or results screen, **Choose a level**
+returns to selection. Completed rounds are saved once; leaving an unfinished
+round does not add a result. Custom honors the CLI grid, timer, and seed options.
+
+### Classic view
 
 - Hold **WASD** or **arrow keys** to move smoothly down corridors. You can also
   use the on-screen pad or an adjacent-cell click. Pausing or leaving the window

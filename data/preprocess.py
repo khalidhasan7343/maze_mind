@@ -1,4 +1,6 @@
-"""
+"""Convert stored telemetry into model features and reusable numeric scales. Single-round
+and batch helpers keep live inference, training, and dashboard projections consistent.
+
 Telemetry Preprocessing, Feature Engineering & Affine Normalization.
 
 ===============================================================================
@@ -24,7 +26,8 @@ THEORETICAL FOUNDATION & LECTURE CONCEPTS:
    [0, 2] (e.g. backtracks), dimension j dominates the metric by a factor of 2500x.
    Min-Max normalization transforms each numeric feature into [0, 1]:
        x'_i = (x_i - min_i) / (max_i - min_i)
-   Ensuring isotropic weight across all behavioral dimensions.
+   This prevents a feature's numeric range alone from dominating the distance.
+   Scaling balances ranges; it does not prove equal predictive importance.
 
 3. DATA DEFENSE & NUMERICAL STABILITY:
    Constant features (where max_i == min_i) are mapped to 0.0 to prevent division
@@ -55,6 +58,9 @@ OUTCOME_MAP = {"escaped": 0, "caught": 1, "timeout": 2}
 
 
 def load_raw_dataframe(db_path: str | None = None) -> pd.DataFrame:
+    """Read logger dictionaries into a DataFrame so offline training starts from the same
+    persisted telemetry as player records.
+    """
     logger = RoundLogger(db_path=db_path) if db_path else RoundLogger()
     rows = logger.fetch_all()
     df = pd.DataFrame(rows)
@@ -62,9 +68,13 @@ def load_raw_dataframe(db_path: str | None = None) -> pd.DataFrame:
 
 
 def _repair_or_drop(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop rounds with no movement at all (player quit before any
+    """Remove incomplete or invalid examples before feature calculation so training does
+    not rely on undefined movement ratios or unsupported outcomes.
+
+    Drop rounds with no movement at all (player quit before any
     logged decision) — these carry no signal and would produce
-    div-by-zero efficiency ratios. Also drop rows with invalid outcomes."""
+    div-by-zero efficiency ratios. Also drop rows with invalid outcomes.
+    """
     before = len(df)
     df = df[df["player_path_len"] > 0].copy()
     df = df.dropna(subset=["time_taken_s", "player_path_len", "optimal_path_len"])
@@ -77,8 +87,12 @@ def _repair_or_drop(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def extract_round_features(row: dict) -> dict:
-    """Extract engineered features for a single round dict (e.g. from DB)
-    matching the pipeline's expected format."""
+    """Calculate features for one completed record so live post-round classification uses
+    the same definitions as batch training.
+
+    Extract engineered features for a single round dict (e.g. from DB)
+    matching the pipeline's expected format.
+    """
     decision_times = row.get("decision_times_s")
     if isinstance(decision_times, str):
         try:
@@ -111,6 +125,9 @@ def extract_round_features(row: dict) -> dict:
 
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Calculate features across stored rounds so all models receive consistent progress,
+    maze size, outcome, and timing measurements.
+    """
     df = _repair_or_drop(df)
 
     remaining = df.get("remaining_path_len", pd.Series(np.nan, index=df.index))
@@ -120,6 +137,9 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     df["outcome_code"] = df["outcome"].map(OUTCOME_MAP)
 
     def _decision_var(raw_json):
+        """Decode stored decision delays defensively so absent or malformed JSON does not
+        prevent batch feature extraction.
+        """
         try:
             times = json.loads(raw_json) if raw_json else []
         except (TypeError, json.JSONDecodeError):
@@ -132,9 +152,14 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def min_max_normalize(df: pd.DataFrame, columns: list) -> tuple:
-    """Returns (normalised_df, scale_params) so the same scale can be
-    reapplied to a single live round during play (for the win-probability
-    meter and KNN skill lookup)."""
+    """Fit numeric ranges and return them with the scaled data so distance-based models can
+    reuse exactly the same units during inference.
+
+    Returns (normalised_df, scale_params) so the same training ranges can be
+    reapplied to new records and dashboard data. K-Means uses these saved
+    parameters; KNN includes its own scaler inside its prediction pipeline.
+    The logistic regression model uses unscaled snapshot features.
+    """
     scale_params = {}
     out = df.copy()
     for col in columns:
@@ -146,9 +171,13 @@ def min_max_normalize(df: pd.DataFrame, columns: list) -> tuple:
 
 
 def apply_scale(row: dict, scale_params: dict) -> dict:
-    """Apply a previously-fit scale to a single new feature dict (e.g.
+    """Reuse saved ranges for a single record so new predictions are measured in the
+    training coordinate system.
+
+    Apply a previously-fit scale to a single new feature dict (e.g.
     live during a round) — preserves unscaled features while scaling
-    columns present in scale_params."""
+    columns present in scale_params.
+    """
     scaled = dict(row)
     for col, params in scale_params.items():
         if col in row:
@@ -158,7 +187,11 @@ def apply_scale(row: dict, scale_params: dict) -> dict:
 
 
 def build_feature_frame(db_path: str | None = None, current_only: bool = True) -> pd.DataFrame:
-    """Engineered, unscaled data. Supervised callers split before fitting scalers."""
+    """Build finite, eligible, unscaled telemetry so supervised callers can split their
+    data before fitting a scaler and avoid evaluation leakage.
+
+    Engineered, unscaled data. Supervised callers split before fitting scalers.
+    """
     raw = load_raw_dataframe(db_path)
     if raw.empty:
         raise ValueError("No rounds logged yet — run python main.py simulate first")
@@ -175,7 +208,11 @@ def build_feature_frame(db_path: str | None = None, current_only: bool = True) -
 
 
 def scale_frame(df: pd.DataFrame, scale_params: dict) -> pd.DataFrame:
-    """Transform a frame using the model's saved training scale."""
+    """Apply saved model ranges to a batch so report plots and predictions remain
+    consistent when new rounds change the dataset range.
+
+    Transform a frame using the model's saved training scale.
+    """
     out = df.copy()
     for col, params in scale_params.items():
         if col in out:
@@ -184,8 +221,12 @@ def scale_frame(df: pd.DataFrame, scale_params: dict) -> pd.DataFrame:
 
 
 def build_training_frame(db_path: str | None = None) -> tuple:
-    """Full pipeline: raw rows -> engineered -> normalised.
-    Returns (normalized_df, scale_params)."""
+    """Combine feature engineering and normalization for callers needing a fully scaled
+    dataset, such as unsupervised clustering.
+
+    Full pipeline: raw rows -> engineered -> normalised.
+    Returns (normalized_df, scale_params).
+    """
     engineered = build_feature_frame(db_path)
     encode_cols = ["outcome_code"]  # categorical, encoded not scaled
     numeric_cols = RAW_NUMERIC_FEATURES + ["decision_time_variance"]

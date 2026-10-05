@@ -1,3 +1,8 @@
+"""Drive classic menus and terminal screens through real event handling. These integration
+checks protect navigation, rendering, custom settings, and completed-round persistence
+together.
+"""
+
 from unittest.mock import Mock
 
 import pygame
@@ -12,9 +17,15 @@ from game.ui import pygame_ui as ui
 
 @pytest.mark.parametrize("outcome", [Outcome.ESCAPED, Outcome.CAUGHT, Outcome.TIMEOUT])
 def test_terminal_outcomes_render_results_and_log_once(tmp_path, monkeypatch, outcome):
+    """Exercise all classic terminal outcomes through input and rendering so results appear
+    and completed rounds are stored only once.
+    """
     logger = RoundLogger(str(tmp_path / "ui.db"))
     events = []
     def factory(config):
+        """Prepare a real engine one step from the requested outcome so the UI test reaches
+        escape, capture, or timeout through its normal event flow.
+        """
         engine = RoundEngine(config)
         engine.update(simulated_dt=0)
         if outcome == Outcome.TIMEOUT:
@@ -48,6 +59,9 @@ def test_terminal_outcomes_render_results_and_log_once(tmp_path, monkeypatch, ou
 
 
 def test_menu_custom_selection_pause_and_history(tmp_path, monkeypatch):
+    """Drive classic selection, pause, and history screens so navigation preserves custom
+    configuration and returns to the expected state.
+    """
     logger = RoundLogger(str(tmp_path / "ui.db"))
     schedule = [
         [],

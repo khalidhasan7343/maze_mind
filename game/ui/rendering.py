@@ -1,4 +1,9 @@
-"""Maze, character, and portal rendering."""
+"""Draw the classic maze, route hints, characters, and exit marker. Separating these
+helpers from the classic event loop keeps drawing concerns independent of input and
+round state changes.
+
+Maze, character, and portal rendering.
+"""
 
 import math
 import time
@@ -14,7 +19,11 @@ from game.ui.theme import (
 )
 
 def _create_window_icon() -> pygame.Surface:
-    """Synthesize a crisp 32x32 application taskbar icon."""
+    """Build the application icon in Pygame so the classic window has recognizable branding
+    without requiring an external image asset.
+
+    Synthesize a crisp 32x32 application taskbar icon.
+    """
     surf = pygame.Surface((32, 32), pygame.SRCALPHA)
     pygame.draw.rect(surf, (22, 27, 39), (0, 0, 32, 32), border_radius=6)
     pygame.draw.rect(surf, (99, 102, 241), (0, 0, 32, 32), width=2, border_radius=6)
@@ -30,7 +39,11 @@ def _create_window_icon() -> pygame.Surface:
 
 
 def _draw_player_icon(screen: pygame.Surface, px: int, py: int, cell_size: int, direction: str) -> None:
-    """Render a tactical operative icon with glowing shield and directional chevron."""
+    """Display the player and last movement direction so the classic board provides an
+    immediate orientation cue.
+
+    Render a tactical operative icon with glowing shield and directional chevron.
+    """
     r = max(6, cell_size // 3)
     p_glow = int(cell_size * 0.42 + 2 * math.sin(time.monotonic() * 6))
     s_pglow = pygame.Surface((p_glow * 2, p_glow * 2), pygame.SRCALPHA)
@@ -55,7 +68,11 @@ def _draw_player_icon(screen: pygame.Surface, px: int, py: int, cell_size: int, 
 
 
 def _draw_hunter_icon(screen: pygame.Surface, hx: int, hy: int, cell_size: int) -> None:
-    """Render a sinister pursuer skull/visor icon with glowing slit eyes."""
+    """Give the pursuer a distinct visual marker so players can identify the threat on the
+    classic maze.
+
+    Render a sinister pursuer skull/visor icon with glowing slit eyes.
+    """
     r = max(6, cell_size // 3)
     # Main skull plate
     pygame.draw.circle(screen, (160, 20, 20), (hx, hy), r)
@@ -72,7 +89,11 @@ def _draw_hunter_icon(screen: pygame.Surface, hx: int, hy: int, cell_size: int) 
 
 
 def _draw_exit_portal(screen: pygame.Surface, ex: int, ey: int, cell_size: int) -> None:
-    """Render a radiant dimensional exit portal with glowing rings."""
+    """Highlight the escape destination with a visible beacon so the objective stays
+    recognizable among maze walls.
+
+    Render a radiant dimensional exit portal with glowing rings.
+    """
     r = max(6, cell_size // 3)
     exit_glow = int(cell_size * 0.45 + 3 * math.sin(time.monotonic() * 5))
     s_exit = pygame.Surface((exit_glow * 2, exit_glow * 2), pygame.SRCALPHA)
@@ -100,7 +121,11 @@ def _draw_maze(
     radar_guide_path: list[tuple[int, int]],
     radar_pulse_alpha: int = 0,
 ) -> None:
-    """Render the high-resolution maze grid, passages, breadcrumbs, and radar guide trail."""
+    """Draw passages, visited cells, and route hints together so the classic board reflects
+    both maze structure and navigation feedback.
+
+    Render the high-resolution maze grid, passages, breadcrumbs, and radar guide trail.
+    """
     w_px = maze.width * cell_size
     h_px = maze.height * cell_size
 
@@ -152,6 +177,9 @@ def _draw_maze(
 
 
 def _cell_center(cell: tuple[int, int], offset_x: int, offset_y: int, cell_size: int) -> tuple[int, int]:
+    """Convert a grid cell to its pixel center so the player, hunter, and exit align with
+    the classic maze tiles.
+    """
     x, y = cell
     return (
         offset_x + x * cell_size + cell_size // 2,

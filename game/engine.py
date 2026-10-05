@@ -1,4 +1,7 @@
-"""
+"""Own the rules and clock of a round, including movement, abilities, collisions, and
+outcomes. This module makes interactive play and training simulations obey the same
+rules without depending on Pygame.
+
 Master Class Game Engine & Entity State Management.
 
 ===============================================================================
@@ -40,7 +43,11 @@ from .maze_gen import Maze, generate_maze
 
 
 class Outcome(Enum):
-    """Terminal and active states of a single game round."""
+    """Represent active and terminal round results with fixed values so the engine,
+    database, and UI agree on what ended a round.
+
+    Terminal and active states of a single game round.
+    """
     PLAYING = "playing"
     ESCAPED = "escaped"
     CAUGHT = "caught"
@@ -49,7 +56,11 @@ class Outcome(Enum):
 
 @dataclass
 class RoundConfig:
-    """Configuration parameters for maze sizing, time limits, and cadences."""
+    """Collect validated round settings in one value object so CLI selection, difficulty
+    presets, and bot simulations use the same configuration contract.
+
+    Configuration parameters for maze sizing, time limits, and cadences.
+    """
     width: int = 14
     height: int = 14
     round_time_limit_s: float = 60.0
@@ -62,8 +73,13 @@ class RoundConfig:
     fps: int = 30
     seed: int | None = None
     route_guide: bool = False
+    hunter_waits_for_player: bool = False
+    hunter_always_pursues: bool = False
 
     def __post_init__(self):
+        """Reject unsupported dimensions and timing values at construction so invalid
+        settings cannot reach the simulation loop.
+        """
         if self.width < 2 or self.height < 2:
             raise ValueError("Maze width and height must be at least 2")
         if self.fps <= 0 or not math.isfinite(self.round_time_limit_s) or self.round_time_limit_s < 0:
@@ -75,7 +91,11 @@ class RoundConfig:
 
 
 class PlayerEntity:
-    """Encapsulates player state, move verification, and tactical abilities."""
+    """Own player position, history, and ability resources so the engine can coordinate
+    actions without scattering player state across UI code.
+
+    Encapsulates player state, move verification, and tactical abilities.
+    """
 
     def __init__(
         self,
@@ -85,6 +105,9 @@ class PlayerEntity:
         radar_charges: int = 2,
         dash_cooldown_s: float = 8.0,
     ):
+        """Keep player movement history, decision timing, and ability resources together so
+        a new round begins with clean telemetry and charges.
+        """
         self.position = start_pos
         self.fps = fps
         self.path_taken: list[tuple[int, int]] = [start_pos]
@@ -103,29 +126,49 @@ class PlayerEntity:
 
     @property
     def can_dash(self) -> bool:
+        """Expose dash readiness so input handlers and ability buttons agree on whether the
+        cooldown permits a dash.
+        """
         return self.dash_cooldown_frames <= 0
 
     @property
     def dash_cooldown_remaining_s(self) -> float:
+        """Present cooldown ticks as seconds so the UI can explain when dash becomes
+        available again.
+        """
         return max(0.0, self.dash_cooldown_frames / self.fps)
 
     @property
     def can_smoke(self) -> bool:
+        """Expose remaining smoke availability so exhausted charges cannot be activated
+        through a different input method.
+        """
         return self.smoke_charges > 0
 
     @property
     def can_radar(self) -> bool:
+        """Check both radar charges and cooldown so buttons and keyboard controls follow
+        the same readiness rules.
+        """
         return self.radar_charges > 0 and self.radar_cooldown_frames <= 0
 
     def update_cooldowns(self) -> None:
-        """Decrement ability cooldown counters by one frame."""
+        """Decrease cooldowns on simulation ticks so abilities recover consistently across
+        different display frame rates.
+
+        Decrement ability cooldown counters by one frame.
+        """
         if self.dash_cooldown_frames > 0:
             self.dash_cooldown_frames -= 1
         if self.radar_cooldown_frames > 0:
             self.radar_cooldown_frames -= 1
 
     def record_move(self, new_pos: tuple[int, int], direction: str, timestamp: float | None = None) -> None:
-        """Log legal position transition and evaluate backtrack heuristics."""
+        """Capture each successful move and its decision delay so the logger and learning
+        models can measure navigation behavior.
+
+        Log legal position transition and evaluate backtrack heuristics.
+        """
         now = time.monotonic() if timestamp is None else timestamp
         self.decision_times_s.append(now - self._last_decision_ts)
         self._last_decision_ts = now
@@ -140,13 +183,21 @@ class PlayerEntity:
 
 
 class RoundEngine:
-    """Master game loop engine orchestrating environment, entities, and state transitions."""
+    """Own a round independently of its renderer so both interactive views and headless
+    simulations can reuse its rules and clock.
+
+    Master game loop engine orchestrating environment, entities, and state transitions.
+    """
 
     def __init__(self, config: RoundConfig):
+        """Build the maze, entities, and shared clock so interactive play and bot
+        simulation run the same game rules.
+        """
         self.config = config
         self.elapsed_s = 0.0
         self._simulated = False
         self._tick_accumulator = 0.0
+        self.chase_started = not config.hunter_waits_for_player
         self.maze: Maze = generate_maze(config.width, config.height, seed=config.seed)
         self.player = PlayerEntity(
             self.maze.start,
@@ -162,6 +213,7 @@ class RoundEngine:
             move_interval=config.hunter_move_interval,
             awakening_duration_s=config.awakening_duration_s,
             fps=config.fps,
+            always_pursues=config.hunter_always_pursues,
         )
         self.outcome = Outcome.PLAYING
         self.frame = 0
@@ -178,7 +230,11 @@ class RoundEngine:
         self.recent_events: list[dict] = []
 
     def pause(self) -> None:
-        """Pause the active round, freezing game timers and entity updates."""
+        """Freeze the simulation at its current time so pause screens cannot consume escape
+        time or let the hunter continue moving.
+
+        Pause the active round, freezing game timers and entity updates.
+        """
         if self.outcome == Outcome.PLAYING and not self.is_paused:
             if not self._simulated:
                 self.update()
@@ -188,7 +244,11 @@ class RoundEngine:
             self._pause_start_ts = time.monotonic()
 
     def resume(self) -> None:
-        """Resume the paused round and compensate the elapsed timer."""
+        """Reset the wall-clock reference so time spent paused is excluded from round
+        duration and decision measurements.
+
+        Resume the paused round and compensate the elapsed timer.
+        """
         if self.is_paused:
             self.is_paused = False
             self.total_paused_s += time.monotonic() - self._pause_start_ts
@@ -196,7 +256,11 @@ class RoundEngine:
             self._pause_start_ts = 0.0
 
     def toggle_pause(self) -> bool:
-        """Toggle paused state. Returns True if paused, False if active."""
+        """Provide one pause switch so callers can toggle state without duplicating pause
+        and resume logic.
+
+        Toggle paused state. Returns True if paused, False if active.
+        """
         if self.is_paused:
             self.resume()
         else:
@@ -206,34 +270,59 @@ class RoundEngine:
     # Backward-compatible attribute delegations
     @property
     def player_pos(self) -> tuple[int, int]:
+        """Keep the older engine-level position interface available while PlayerEntity owns
+        the actual player state.
+        """
         return self.player.position
 
     @player_pos.setter
     def player_pos(self, pos: tuple[int, int]) -> None:
+        """Support existing callers that set an engine-level position by forwarding that
+        assignment to PlayerEntity; this bypasses normal movement telemetry.
+        """
         self.player.position = pos
 
     @property
     def path_taken(self) -> list[tuple[int, int]]:
+        """Expose player history through the shared engine interface so logging and
+        rendering can read it without duplicating storage.
+        """
         return self.player.path_taken
 
     @property
     def backtracks(self) -> int:
+        """Expose reversal counts to legacy callers so feature extraction continues working
+        after player state moved into PlayerEntity.
+        """
         return self.player.backtracks
 
     @property
     def decision_times_s(self) -> list[float]:
+        """Provide the recorded decision delays to the logger and models without exposing
+        the rest of the player implementation.
+        """
         return self.player.decision_times_s
 
     @property
     def _last_decision_ts(self) -> float:
+        """Preserve compatibility for callers reading the player decision-clock reference
+        through the engine.
+        """
         return self.player._last_decision_ts
 
     @_last_decision_ts.setter
     def _last_decision_ts(self, val: float) -> None:
+        """Forward legacy decision-clock assignments to PlayerEntity so the two interfaces
+        cannot develop conflicting timestamps.
+        """
         self.player._last_decision_ts = val
 
     def _far_corner_from_start(self) -> tuple[int, int]:
-        """Spawn in a side corridor, rather than blocking the unique escape route."""
+        """Choose a hunter spawn away from the escape route when possible so the player has
+        a fair opportunity to leave the start.
+
+        Spawn in a side corridor, rather than blocking the unique escape route.
+        """
         route = astar_path(self.maze, self.maze.start, self.maze.exit)
         distances = {cell: 0 for cell in route}
         queue = deque(route)
@@ -251,6 +340,9 @@ class RoundEngine:
         return max(candidates, key=lambda cell: (distances[cell], self.maze.shortest_path_len(self.maze.start, cell)))
 
     def _prepare_action(self) -> bool:
+        """Synchronize real-time state and reject actions after pause or completion so
+        every movement and ability obeys the same lifecycle rules.
+        """
         if self.outcome != Outcome.PLAYING or self.is_paused:
             return False
         if not self._simulated:
@@ -258,10 +350,19 @@ class RoundEngine:
         return self.outcome == Outcome.PLAYING
 
     def _record_move(self, new_pos, direction):
+        """Start a waiting chase only after legal movement and record that movement so menu
+        or idle time cannot penalize an isometric round.
+        """
+        if not self.chase_started:
+            self.chase_started = True
+            self._last_update_ts = time.monotonic()
         self.player.record_move(new_pos, direction, timestamp=self.elapsed_s)
 
     def move_player(self, direction: str) -> bool:
-        """Attempt discrete cardinal movement for the player entity.
+        """Enforce passage legality and terminal outcomes centrally so keyboard, mouse,
+        bots, and direction buttons all use identical movement rules.
+
+        Attempt discrete cardinal movement for the player entity.
 
         Args:
             direction: One of {'N', 'S', 'E', 'W'}.
@@ -289,7 +390,10 @@ class RoundEngine:
         return True
 
     def use_ability(self, ability_name: str, direction: str | None = None) -> dict | bool:
-        """Execute an active tactical ability for the player.
+        """Apply ability costs and effects in the engine so every UI uses the same dash,
+        smoke, radar, and collision behavior.
+
+        Execute an active tactical ability for the player.
 
         Supported abilities:
           - 'dash': Rapid 2-cell advance in chosen (or last moved) direction.
@@ -378,17 +482,28 @@ class RoundEngine:
         return False
 
     def route_guide_path(self) -> list[tuple[int, int]]:
-        """A short, updating trail teaches navigation without revealing the whole solution."""
+        """Give guided difficulties a small refreshed route hint so beginners can learn
+        navigation while still playing the maze.
+
+        A short, updating trail teaches navigation without revealing the whole solution.
+        """
         return astar_path(self.maze, self.player_pos, self.maze.exit)[1:7] if self.config.route_guide else []
 
     @property
     def route_progress(self) -> float:
+        """Measure remaining route distance against the original escape route so the UI can
+        show concrete progress independent of model predictions.
+        """
         optimal = self.maze.shortest_path_len(self.maze.start, self.maze.exit)
         remaining = self.maze.shortest_path_len(self.player_pos, self.maze.exit)
         return max(0.0, min(1.0, 1.0 - remaining / max(1, optimal)))
 
     def update(self, simulated_dt: float | None = None) -> Outcome:
-        """Advance a shared clock; entity ticks remain independent of rendering FPS."""
+        """Advance real or simulated time through fixed entity ticks so hunter speed,
+        cooldowns, and timeout behavior stay consistent for play and training.
+
+        Advance a shared clock; entity ticks remain independent of rendering FPS.
+        """
         if self.outcome != Outcome.PLAYING or self.is_paused:
             return self.outcome
 
@@ -401,6 +516,8 @@ class RoundEngine:
         else:
             remaining = max(0.0, now - self._last_update_ts)
         self._last_update_ts = now
+        if not self.chase_started:
+            return self.outcome
         tick_s = 1.0 / self.config.fps
         while remaining > 1e-10 and self.outcome == Outcome.PLAYING:
             step = min(remaining, tick_s - self._tick_accumulator,
@@ -431,7 +548,11 @@ class RoundEngine:
         return self.outcome
 
     def win_probability_features(self) -> dict:
-        """Live engineered feature vector for logistic regression win prediction."""
+        """Build the live feature contract in one place so snapshot training and the HUD
+        predictor describe the same game state.
+
+        Live engineered feature vector for logistic regression win prediction.
+        """
         dist_to_hunter = self.maze.shortest_path_len(self.player.position, self.hunter.position)
         dist_to_exit = self.maze.shortest_path_len(self.player.position, self.maze.exit)
         time_left_ratio = max(0.0, 1 - self.elapsed_s / self.config.round_time_limit_s) if self.config.round_time_limit_s else 0.0

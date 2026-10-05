@@ -1,6 +1,7 @@
--- Maze Mind round-by-round log.
--- One row per completed round. Raw, unnormalised — preprocessing.py
--- turns this into model-ready feature vectors.
+-- Purpose: define the persistent telemetry contract shared by human sessions and bots.
+-- One rounds row represents a completed game. Store raw values so data/preprocess.py
+-- can engineer features without losing the original measurements or decision timings.
+-- data/logger.py applies this schema and adds missing legacy columns automatically.
 
 CREATE TABLE IF NOT EXISTS rounds (
     round_id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,10 +30,13 @@ CREATE TABLE IF NOT EXISTS rounds (
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Index common session, outcome, and player-history queries without changing stored data.
 CREATE INDEX IF NOT EXISTS idx_rounds_session ON rounds(session_id);
 CREATE INDEX IF NOT EXISTS idx_rounds_outcome ON rounds(outcome);
 CREATE INDEX IF NOT EXISTS idx_rounds_player ON rounds(player_tag, round_id);
 
+-- Mid-round states inherit their eventual outcome from the parent rounds record.
+-- This separate table supports escape-probability training without repeating full records.
 CREATE TABLE IF NOT EXISTS round_snapshots (
     snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
     round_id INTEGER NOT NULL REFERENCES rounds(round_id),
@@ -41,4 +45,5 @@ CREATE TABLE IF NOT EXISTS round_snapshots (
     time_left_ratio REAL NOT NULL,
     efficiency REAL NOT NULL
 );
+-- Speed up joining feature snapshots to the completed round that labels them.
 CREATE INDEX IF NOT EXISTS idx_snapshots_round ON round_snapshots(round_id);

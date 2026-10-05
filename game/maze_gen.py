@@ -1,4 +1,7 @@
-"""
+"""Generate connected, seeded mazes and provide grid traversal and distance queries. The
+engine, AI, and training pipeline share this representation so walls and route
+measurements agree.
+
 Constraint Satisfaction Problem (CSP) Maze Generation.
 
 ===============================================================================
@@ -46,6 +49,9 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Maze:
+    """Store walls, endpoints, and traversal helpers together so rendering, search, and
+    feature extraction operate on the same grid.
+    """
     width: int
     height: int
     # walls[y][x] is a dict of which of the 4 directions have a wall
@@ -63,10 +69,17 @@ class Maze:
     OPPOSITE = {"N": "S", "S": "N", "E": "W", "W": "E"}
 
     def in_bounds(self, x: int, y: int) -> bool:
+        """Check grid limits so neighbor traversal cannot leave the maze even when
+        examining a boundary cell.
+        """
         return 0 <= x < self.width and 0 <= y < self.height
 
     def neighbors(self, x: int, y: int):
-        """Open (non-wall) neighbours of a cell."""
+        """Expose only reachable adjacent cells so BFS and A* share the same wall and
+        passage rules.
+
+        Open (non-wall) neighbours of a cell.
+        """
         for d, (dx, dy) in self.DIRS.items():
             if not self.walls[y][x][d]:
                 nx, ny = x + dx, y + dy
@@ -74,9 +87,13 @@ class Maze:
                     yield nx, ny
 
     def shortest_path_len(self, a: tuple, b: tuple) -> int:
-        """BFS shortest path length in cells (used for the min-length
+        """Use BFS as a distance reference for generation constraints, telemetry, and AI
+        detection so those measurements count actual corridor steps.
+
+        BFS shortest path length in cells (used for the min-length
         constraint and as the 'optimal path' baseline for efficiency
-        ratio features)."""
+        ratio features).
+        """
         q = deque([a])
         dist = {a: 0}
         while q:
@@ -90,6 +107,9 @@ class Maze:
         return -1  # unreachable — should never happen once constraints hold
 
     def dead_end_count(self) -> int:
+        """Measure how many cells have just one escape passage so models can account for
+        maze structure when comparing player behavior.
+        """
         count = 0
         for y in range(self.height):
             for x in range(self.width):
@@ -100,7 +120,10 @@ class Maze:
 
 
 def _carve(maze: Maze, rng: random.Random) -> None:
-    """Randomised DFS backtracking carve = the CSP backtracking search.
+    """Create a connected spanning tree with iterative depth-first search so every cell is
+    reachable and there is a unique route between cells.
+
+    Randomised DFS backtracking carve = the CSP backtracking search.
 
     Each recursive call is a partial assignment of edge variables; picking
     an unvisited neighbour is choosing a value from that variable's
@@ -133,7 +156,10 @@ def generate_maze(
     seed: int | None = None,
     max_attempts: int = 50,
 ) -> Maze:
-    """Generate a maze satisfying the CSP constraints.
+    """Create reproducible mazes that satisfy route-length constraints so gameplay remains
+    solvable and seeded tests can reproduce the same layout.
+
+    Generate a maze satisfying the CSP constraints.
 
     min_path_ratio is a stretch factor over Manhattan distance, capped at
     the maximum path length compatible with endpoint parity on tiny grids.

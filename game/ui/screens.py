@@ -1,4 +1,8 @@
-"""Menu, history, pause, and results views."""
+"""Draw classic menu, career history, pause, and result screens from supplied state. These
+functions keep non-gameplay layouts separate from the main classic event loop.
+
+Menu, history, pause, and results views.
+"""
 
 import pygame
 from game.engine import Outcome
@@ -36,6 +40,9 @@ def draw_menu(
     screen,
     selected_tier,
 ):
+    """Explain controls and difficulty choices before classic play so a player can select
+    an appropriate challenge.
+    """
     title_surf = big_banner_font.render("MAZE MIND", True, COLOR_TEXT_PRIMARY)
     screen.blit(title_surf, title_surf.get_rect(center=(SCREEN_WIDTH // 2, 65)))
 
@@ -92,6 +99,9 @@ def draw_history(
     title_font,
 ):
     # Header
+    """Display saved career summaries and recent rounds so players can review progress
+    through the classic UI.
+    """
     pygame.draw.rect(screen, COLOR_HUD_BG, (0, 0, SCREEN_WIDTH, 56))
     pygame.draw.line(screen, COLOR_CARD_BORDER, (0, 56), (SCREEN_WIDTH, 56), 2)
     btn_back_history.draw(screen)
@@ -219,6 +229,9 @@ def draw_pause(
     pause_modal_y,
     screen,
 ):
+    """Show resume, restart, history, and exit actions above the frozen board so pausing
+    does not lose the current round context.
+    """
     dim_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
     dim_surf.fill((8, 11, 18, 215))
     screen.blit(dim_surf, (0, 0))
@@ -259,6 +272,9 @@ def draw_results(
     screen,
     session,
 ):
+    """Explain the completed outcome and navigation performance so the player receives
+    useful feedback before replaying or changing level.
+    """
     dim_surf = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
     dim_surf.fill((8, 11, 18, 215))
     screen.blit(dim_surf, (0, 0))

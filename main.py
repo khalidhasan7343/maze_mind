@@ -1,4 +1,7 @@
-"""
+"""CLI entry point for playing, collecting telemetry, training models, exporting figures,
+inspecting records, and reviewing labels. It connects commands to services so command
+parsing stays outside gameplay and learning code.
+
 Maze Mind — entry point.
 
 Wires the game loop to the logger and the model outputs (per the
@@ -26,8 +29,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 
 def cmd_play(args):
+    """Connect the selected UI to the round configuration, player history, and logger so
+    playing and recording a round use the same services.
+    """
     from game.engine import RoundConfig
-    from game.ui.pygame_ui import run_round
+    if args.view == "isometric":
+        from game.ui.isometric_ui import run_round
+    else:
+        from game.ui.pygame_ui import run_round
     from data.logger import RoundLogger
     from ml.knn_skill import skill_from_history
 
@@ -46,12 +55,18 @@ def cmd_play(args):
 
 
 def cmd_simulate(args):
+    """Run the bot dataset generator from the CLI so the models have labelled examples
+    before enough human rounds exist.
+    """
     from data.simulate import generate_dataset
     n = generate_dataset(n_per_profile=args.rounds_per_profile)
     print(f"Logged {n} synthetic rounds.")
 
 
 def cmd_train(args):
+    """Train all three learning models in one command so skill, playstyle, and escape
+    estimates can be refreshed together.
+    """
     from ml.knn_skill import train as train_knn
     from ml.kmeans_strategy import train as train_kmeans
     from ml.logreg_winprob import train as train_logreg
@@ -65,13 +80,20 @@ def cmd_train(args):
 
 
 def cmd_dashboard(args):
+    """Generate report images and print their locations so model and search results can be
+    inspected outside the game.
+    """
     from dashboard.report_plots import generate_all
     for path in generate_all():
         print(f"wrote {path}")
 
 
 def cmd_records(args):
-    """Display comprehensive career statistics and match log from the terminal."""
+    """Provide access to saved player statistics without opening a game window, using the
+    same summaries as the UI.
+
+    Display comprehensive career statistics and match log from the terminal.
+    """
     from data.logger import RoundLogger
     logger = RoundLogger()
     summary = logger.get_player_summary(args.tag)
@@ -108,18 +130,27 @@ def cmd_records(args):
 
 
 def cmd_label(args):
-    """Record an independently reviewed skill label for supervised training."""
+    """Let a reviewer supply a training label explicitly so a model prediction is never
+    mistaken for verified player skill.
+
+    Record an independently reviewed skill label for supervised training.
+    """
     from data.logger import RoundLogger
     RoundLogger().update_skill_label(args.round_id, args.skill)
     print(f"Round {args.round_id} verified as {args.skill}.")
 
 
 def main():
+    """Define the supported commands and dispatch their handlers through one entry point,
+    with readable CLI errors for invalid input.
+    """
     parser = argparse.ArgumentParser(description="Maze Mind")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_play = sub.add_parser("play", help="Play one round")
     p_play.add_argument("--tag", default="player1")
+    p_play.add_argument("--view", choices=["classic", "isometric"], default="isometric",
+                        help="Choose the isometric interface (default) or the classic board")
     p_play.add_argument("--width", type=int, default=14)
     p_play.add_argument("--height", type=int, default=14)
     p_play.add_argument("--time-limit", type=float, default=60.0)

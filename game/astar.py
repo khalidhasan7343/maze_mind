@@ -1,4 +1,6 @@
-"""
+"""Find legal routes and control the hunter's behavior. Keeping path search and pursuit
+here lets the engine use the same AI independently of how the maze is drawn.
+
 A* Search Engine & Hunter Behavioral State Machine.
 
 ===============================================================================
@@ -45,7 +47,11 @@ from enum import Enum
 
 
 class HunterState(Enum):
-    """Behavioral states for the Hunter AI finite state machine."""
+    """Name each hunter behavior explicitly so timing, movement, collision checks, and UI
+    feedback can refer to the same state.
+
+    Behavioral states for the Hunter AI finite state machine.
+    """
     AWAKENING = "awakening"  # Grace period countdown at start of round
     PATROL = "patrol"        # Roaming/surveying when distant from player
     PURSUIT = "pursuit"      # Active A* pursuit of the player's position
@@ -53,7 +59,10 @@ class HunterState(Enum):
 
 
 def manhattan(a: tuple[int, int], b: tuple[int, int]) -> int:
-    """Admissible and consistent heuristic for 4-directional grid topology.
+    """Give A* a cheap lower bound on travel distance so it can prioritize promising cells
+    without overestimating the remaining route.
+
+    Admissible and consistent heuristic for 4-directional grid topology.
 
     Args:
         a: (x, y) coordinates of the source node.
@@ -66,7 +75,10 @@ def manhattan(a: tuple[int, int], b: tuple[int, int]) -> int:
 
 
 def astar_path(maze, start: tuple[int, int], goal: tuple[int, int]) -> list[tuple[int, int]]:
-    """Compute the optimal shortest path from start to goal via A* search.
+    """Supply legal shortest routes to the hunter, route guides, and bots so each caller
+    follows actual open maze corridors.
+
+    Compute the optimal shortest path from start to goal via A* search.
 
     Maintains admissibility through Manhattan distance heuristic. Solvability
     is guaranteed on perfect CSP spanning-tree mazes.
@@ -117,7 +129,10 @@ def astar_path(maze, start: tuple[int, int], goal: tuple[int, int]) -> list[tupl
 
 
 class Hunter:
-    """Hunter entity governed by a behavioral state machine with dynamic A* tracking.
+    """Keep pursuit state and planning cadence together so the round engine can advance AI
+    without knowing the details of its pathfinding.
+
+    Hunter entity governed by a behavioral state machine with dynamic A* tracking.
 
     Implements:
       - Awakening countdown (grace period preventing round-start ambushes).
@@ -133,15 +148,22 @@ class Hunter:
         move_interval: int = 28,
         awakening_duration_s: float = 0.0,
         fps: int = 30,
+        always_pursues: bool = False,
     ):
+        """Initialize movement cadence, pursuit policy, and state timers so each round has
+        an independent hunter with the selected difficulty.
+        """
         self.position = position
         self.replan_interval = max(1, replan_interval)
         self.move_interval = max(1, move_interval)
         self.fps = fps
+        self.always_pursues = always_pursues
 
         # FSM and State Timers
         self.awakening_frames = int(awakening_duration_s * fps)
         self.state = HunterState.AWAKENING if self.awakening_frames > 0 else HunterState.PATROL
+        if always_pursues and not self.awakening_frames:
+            self.state = HunterState.PURSUIT
         self.stun_frames = 0
         self.detection_radius = 8  # Cells within which pursuit triggers
         self.patrol_target: tuple[int, int] | None = None
@@ -153,18 +175,30 @@ class Hunter:
 
     @property
     def is_awakening(self) -> bool:
+        """Expose the grace-period state so renderers can show that the hunter has not
+        become active yet.
+        """
         return self.state == HunterState.AWAKENING
 
     @property
     def awakening_time_left_s(self) -> float:
+        """Convert the remaining grace-period ticks into seconds so the UI can display an
+        understandable countdown.
+        """
         return max(0.0, self.awakening_frames / self.fps)
 
     @property
     def is_stunned(self) -> bool:
+        """Expose smoke immobilization so the UI and player feedback can identify a
+        temporarily harmless hunter.
+        """
         return self.state == HunterState.STUNNED
 
     @property
     def stun_time_left_s(self) -> float:
+        """Convert stun ticks into seconds so players can judge how much escape time their
+        smoke provides.
+        """
         return max(0.0, self.stun_frames / self.fps)
 
     def set_difficulty(
@@ -173,7 +207,11 @@ class Hunter:
         move_interval: int,
         awakening_duration_s: float = 0.0,
     ) -> None:
-        """Calibrate cadence parameters per predicted skill classification."""
+        """Update hunter timing in one place so difficulty adjustments use consistent
+        interval limits and optional awakening time.
+
+        Calibrate cadence parameters per predicted skill classification.
+        """
         self.replan_interval = max(1, replan_interval)
         self.move_interval = max(1, move_interval)
         self.awakening_frames = int(awakening_duration_s * self.fps)
@@ -181,12 +219,19 @@ class Hunter:
             self.state = HunterState.AWAKENING
 
     def stun(self, duration_s: float = 3.0) -> None:
-        """Apply temporary tactical immobilization from player smoke ability."""
+        """Apply smoke protection without shortening an existing stun so repeated uses
+        cannot accidentally make the hunter recover earlier.
+
+        Apply temporary tactical immobilization from player smoke ability.
+        """
         self.stun_frames = max(self.stun_frames, int(duration_s * self.fps))
         self.state = HunterState.STUNNED
 
     def update(self, maze, player_position: tuple[int, int]) -> bool:
-        """Advance the Hunter by one game tick.
+        """Advance AI behavior on engine ticks so path planning, pursuit, and
+        immobilization do not depend on rendering speed.
+
+        Advance the Hunter by one game tick.
 
         Args:
             maze: Active maze structure for pathing and obstacle validation.
@@ -216,7 +261,7 @@ class Hunter:
         # Walls and winding corridors block detection; nearby map coordinates
         # alone do not reveal a player on the other side of the maze.
         dist_to_player = maze.shortest_path_len(self.position, player_position)
-        if 0 <= dist_to_player <= self.detection_radius:
+        if self.always_pursues or 0 <= dist_to_player <= self.detection_radius:
             self.state = HunterState.PURSUIT
             active_move_interval = self.move_interval
             target_pos = player_position
@@ -233,7 +278,8 @@ class Hunter:
             target_pos = self.patrol_target
 
         # Dynamic A* Path Re-planning
-        if self._frame % self.replan_interval == 0 or len(self._path) <= 1 or (self._target != target_pos and self.state == HunterState.PATROL):
+        target_changed = self._target != target_pos and (self.state == HunterState.PATROL or self.always_pursues)
+        if self._frame % self.replan_interval == 0 or len(self._path) <= 1 or target_changed:
             self._path = astar_path(maze, self.position, target_pos)
             self._target = target_pos
 
@@ -246,7 +292,11 @@ class Hunter:
         return moved
 
     def caught(self, player_position: tuple[int, int]) -> bool:
-        """Check collision intersection with the player."""
+        """Centralize lethal contact checks so sharing a cell during awakening or smoke
+        does not incorrectly end the round.
+
+        Check collision intersection with the player.
+        """
         return self.position == player_position and self.state not in (HunterState.AWAKENING, HunterState.STUNNED)
 
 

@@ -1,4 +1,8 @@
-"""Shared layout, colors, and screen states."""
+"""Define classic layout dimensions, colors, and screen-state names. Shared constants keep
+the classic controller, widgets, and drawing helpers visually consistent.
+
+Shared layout, colors, and screen states.
+"""
 
 # Window & Layout Geometry (Spacious Widescreen Cockpit)
 SCREEN_WIDTH = 1040

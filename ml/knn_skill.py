@@ -1,4 +1,7 @@
-"""
+"""Train and apply a KNN skill classifier and map recent skill history to hunter cadence.
+Independent labels and split-specific scaling make the reported evaluation separate from
+automatic difficulty predictions.
+
 KNN Skill Classifier & Dynamic Difficulty Adaptation.
 
 ===============================================================================
@@ -17,8 +20,9 @@ THEORETICAL FOUNDATION & LECTURE CONCEPTS:
    CRITICAL NOTE: Distance-based models are intrinsically sensitive to feature
    scale. If one feature spans [0, 60] (e.g. time_taken_s) while another spans
    [0, 1] (e.g. efficiency_ratio), the former would dominate the squared-error
-   sum by a factor of 3600:1! Min-max normalization [0, 1] is therefore
-   mathematically mandatory.
+   sum by a factor of 3600:1! This project uses min-max scaling to make
+   feature ranges comparable before measuring distances. Each evaluation
+   split fits its own scaler using only its training rows.
 
 3. "DIFFICULTY WITHOUT CHEATING" PRINCIPLE:
    In game AI, artificial difficulty is frequently fabricated by giving the AI
@@ -80,7 +84,11 @@ DIFFICULTY_BY_SKILL = {
 
 
 def train(db_path: str | None = None, k: int = 5, model_path: str = MODEL_PATH):
-    """Evaluate raw telemetry with scaling fitted independently in each split."""
+    """Evaluate and save a skill classifier using independently labelled rounds and split-
+    specific scaling so accuracy is measured without preprocessing leakage.
+
+    Evaluate raw telemetry with scaling fitted independently in each split.
+    """
     global _MODEL_CACHE
     df = build_feature_frame(db_path)
     labelled = df[df["label_source"].isin(["synthetic", "verified"])].dropna(subset=["skill_label"])
@@ -131,7 +139,11 @@ def train(db_path: str | None = None, k: int = 5, model_path: str = MODEL_PATH):
 
 
 def predict_skill(feature_row: dict, model_path: str = MODEL_PATH) -> str:
-    """Classify player skill based on unscaled telemetry features from a completed round."""
+    """Use a cached validated pipeline on raw round features so completed-round skill
+    estimates include the scaler learned during training.
+
+    Classify player skill based on unscaled telemetry features from a completed round.
+    """
     global _MODEL_CACHE
     if _MODEL_CACHE is None or _MODEL_CACHE.get("_path") != model_path:
         bundle = validate_bundle(joblib.load(model_path))
@@ -146,12 +158,20 @@ def predict_skill(feature_row: dict, model_path: str = MODEL_PATH) -> str:
 
 
 def difficulty_for_skill(skill: str) -> dict:
-    """Retrieve cadence tuning parameters corresponding to skill level."""
+    """Return a copy of the skill cadence settings so adaptive rounds can adjust hunter
+    timing without mutating the shared preset dictionary.
+
+    Retrieve cadence tuning parameters corresponding to skill level.
+    """
     return dict(DIFFICULTY_BY_SKILL.get(skill, DIFFICULTY_BY_SKILL["Intermediate"]))
 
 
 def skill_from_history(rows: list, window: int = 5, default: str = "Beginner") -> str:
-    """Median recent tier prevents a single unusual round from changing difficulty."""
+    """Reduce recent skill labels to a median tier so one unusual result does not abruptly
+    change the next round difficulty.
+
+    Median recent tier prevents a single unusual round from changing difficulty.
+    """
     tiers = ["Beginner", "Intermediate", "Expert"]
     labels = [r.get("predicted_skill") or r.get("skill_label") for r in rows[-window:]]
     ranks = [tiers.index(label) for label in labels if label in tiers]

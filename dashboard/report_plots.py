@@ -1,4 +1,7 @@
-"""
+"""Export clustering, skill-label, and A* runtime figures for project analysis. Saved model
+transforms and a noninteractive plotting backend keep reports reproducible without a
+desktop window.
+
 Report Visualizations & Empirical Model Evaluation Analytics.
 
 ===============================================================================
@@ -49,10 +52,16 @@ DEFAULT_KMEANS_PATH = os.path.join(os.path.dirname(__file__), "..", "ml", "model
 
 
 def _ensure_dir():
+    """Create the report output directory when needed so plot generation works on a fresh
+    checkout.
+    """
     os.makedirs(FIG_DIR, exist_ok=True)
 
 
 def plot_elbow_curve(kmeans_model_path: str = DEFAULT_KMEANS_PATH):
+    """Export the saved clustering inertia values so a report can compare candidate
+    playstyle group counts without retraining.
+    """
     _ensure_dir()
     bundle = validate_bundle(joblib.load(kmeans_model_path))
     elbow = bundle["elbow"]
@@ -73,6 +82,9 @@ def plot_elbow_curve(kmeans_model_path: str = DEFAULT_KMEANS_PATH):
 
 
 def plot_pca_clusters(kmeans_model_path: str = DEFAULT_KMEANS_PATH, db_path: str | None = None):
+    """Project telemetry with the saved scaler and PCA so cluster visualizations use the
+    same coordinates as the trained model.
+    """
     _ensure_dir()
     bundle = validate_bundle(joblib.load(kmeans_model_path))
     km, pca, features, cluster_names = bundle["model"], bundle["pca"], bundle["features"], bundle["cluster_names"]
@@ -101,9 +113,13 @@ def plot_pca_clusters(kmeans_model_path: str = DEFAULT_KMEANS_PATH, db_path: str
 
 
 def plot_astar_benchmarks(sizes=(6, 8, 10, 12, 16, 20, 24), trials=8):
-    """Benchmark A* solve time vs maze size — the search-cost evidence
+    """Measure A* search time across maze sizes so the report has empirical evidence of
+    search cost as the grid grows.
+
+    Benchmark A* solve time vs maze size — the search-cost evidence
     figure referenced on slide 10 ('CSP build, visualised' pairs with
-    this for the algorithms half of the report)."""
+    this for the algorithms half of the report).
+    """
     _ensure_dir()
     results = {}
     for size in sizes:
@@ -132,6 +148,9 @@ def plot_astar_benchmarks(sizes=(6, 8, 10, 12, 16, 20, 24), trials=8):
 
 
 def plot_skill_breakdown():
+    """Plot known skill-label counts so a report can inspect class representation in the
+    stored training data.
+    """
     _ensure_dir()
     df = build_feature_frame()
     counts = df["skill_label"].value_counts().reindex(["Beginner", "Intermediate", "Expert"]).fillna(0)
@@ -148,6 +167,9 @@ def plot_skill_breakdown():
 
 
 def generate_all():
+    """Generate the complete figure set from one entry point so the dashboard CLI can
+    regenerate and list report artifacts together.
+    """
     paths = []
     paths.append(plot_elbow_curve())
     paths.append(plot_pca_clusters())
